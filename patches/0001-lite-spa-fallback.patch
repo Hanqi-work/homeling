@@ -1,0 +1,20 @@
+diff --git a/bridge/server.ts b/bridge/server.ts
+index 4c0a5c96..8d60e618 100644
+--- a/bridge/server.ts
++++ b/bridge/server.ts
+@@ -4428,9 +4428,13 @@ export async function serveStatic(
+   let file = Bun.file(full);
+   if (!(await file.exists())) {
+     // SPA fallback: extension-less paths fall back to index.html; missing assets 404.
++    // Homeling additive: `/lite/*` is a second SPA living under web/dist/lite/. An extension-less
++    // miss there falls back to THAT shell, not the root one — otherwise a deep-link refresh of
++    // the new UI serves the old app. Every other path, and every file that exists, is unchanged.
+     if (extname(rel) === "") {
+-      rel = "index.html";
+-      full = join(webDir, "index.html");
++      const lite = rel === "lite" || rel.startsWith("lite/");
++      rel = lite ? "lite/index.html" : "index.html";
++      full = join(webDir, rel);
+       file = Bun.file(full);
+       if (!(await file.exists())) {
+         return text("frontend not built — run `bun run build` in web/", 503);
