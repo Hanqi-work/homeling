@@ -1,0 +1,57 @@
+/**
+ * Daemon configuration. Everything is environment-driven so the launchd plist stays a static
+ * file (ADR-0001) and the same binary runs unchanged in tests and CI.
+ */
+import { join } from "node:path";
+
+export interface DaemonConfig {
+  /** Loopback listen port (default 8790, per PRD §3 / ADR-0004). */
+  readonly port: number;
+  /** Host to bind. Loopback only: tailscale serve does the TLS front door. */
+  readonly hostname: string;
+  /** Absolute path of the web build output to serve at /lite/. */
+  readonly webDist: string;
+  /** SPA entry file name inside webDist. */
+  readonly indexHtml: string;
+  /** Tailscale logins allowed through; empty means deny all non-loopback callers. */
+  readonly trustedUsers: readonly string[];
+  /** The node's tailscale DNS name (no port), accepted in the Host allowlist. */
+  readonly tailscaleHost: string;
+  /** Operator opt-out mirroring Collie's COLLIE_ALLOW_ANY_HOST. */
+  readonly allowAnyHost: boolean;
+}
+
+const DEFAULT_PORT = 8790;
+
+function repoRoot(): string {
+  // apps/daemon/src/config.ts → repo root is three levels up.
+  return join(import.meta.dir, "..", "..", "..");
+}
+
+function readPort(v: string | undefined): number {
+  if (!v) return DEFAULT_PORT;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT;
+}
+
+export function daemonConfigFromEnv(env: Record<string, string | undefined>): DaemonConfig {
+  const port = readPort(env.HOMELING_PORT ?? process.env.HOMELING_PORT);
+  const webDist = env.HOMELING_WEB_DIST ?? process.env.HOMELING_WEB_DIST ?? join(repoRoot(), "apps", "web", "dist");
+  const trustedUsers = (env.HOMELING_TRUSTED_USERS ?? process.env.HOMELING_TRUSTED_USERS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const tailscaleHost = (env.HOMELING_TAILSCALE_HOST ?? process.env.HOMELING_TAILSCALE_HOST ?? "").trim();
+  const allowAnyHost = ["1", "true", "yes"].includes(
+    (env.HOMELING_ALLOW_ANY_HOST ?? process.env.HOMELING_ALLOW_ANY_HOST ?? "").toLowerCase(),
+  );
+  return {
+    port,
+    hostname: "127.0.0.1",
+    webDist,
+    indexHtml: "index.html",
+    trustedUsers,
+    tailscaleHost,
+    allowAnyHost,
+  };
+}
