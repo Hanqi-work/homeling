@@ -1,8 +1,10 @@
 # Collie bridge 只做可插拔 additive patch
 
-## Status
+---
+status: superseded by ADR-0004（zero-touch）
+---
 
-accepted
+> **已被 ADR-0004 取代**：patch 层仍是把用户 Collie 弄坏的暴露面（应用失败 / update 强制覆盖 / rebase 冲突），已改采 zero-touch。以下保留原文供追溯。
 
 Homeling 建立在 Collie 之上但不替代它：同一个人可以只装原版 Collie，也可以装 Collie + Homeling，两者不冲突。而本地的 Collie checkout 是 detached managed checkout，`collie update` 会 `git checkout --force` 丢弃所有 git-tracked 文件的本地编辑（`cli/update.ts:784`）。因此：对 bridge 的一切改动（通知摘要、persona 反代、`/lite` 深链接 fallback）都以 additive patch 形式存放在 homeling 仓库的 `patches/`，由 deploy 脚本在 Collie checkout 上应用；update 冲掉后重跑 apply 即恢复。同时尽量向上游提 PR，让补丁集趋零。
 

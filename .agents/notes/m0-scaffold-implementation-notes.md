@@ -29,6 +29,11 @@
 - **bridge 用 bun 跑源码，不跑编译后的二进制。** `collie build` 编出的 `bin/collie` 没有 ad-hoc 签名，本机一启动就被杀（`OS_REASON_EXEC`，`codesign -s -` 报 unsupported format）。官方 release 的二进制是 ad-hoc 签过的。所以 `~/Library/LaunchAgents/herdr.collie.plist` 的 ProgramArguments 改成 `bun run bridge/index.ts`（备份在 `/tmp/herdr.collie.plist.bak`），源码改动免编译即生效。`bin/collie` 已用官方 v1.14.2 macos-arm64 包还原，给 `collie` CLI 用。
 - **`collie build` 会清空 `web/dist`**（staging 整目录 rename 过来）。deploy-web 必须在 build 之后再跑一次，否则 `/lite` 被清掉。
 
+## Follow-ups（M1 处理）
+
+- **plist 脆弱性**：官方 `collie restart` / `collie update` 会把 plist 改回 `bin/collie _exec-bridge`，补丁失效。M1 在 `scripts/` 加自有 restart（launchctl kickstart，不写回 plist），并在 apply-patches 后自动检查 plist 是否仍指向 bun。
+- **二进制签名**：重编 `bin/collie` 被 OS_REASON_EXEC 杀，`codesign -s -` 报 unsupported format。后续试 `codesign -f -s - --deep` 或 bundle 格式排查；能修则回到官方编译路径，废弃 plist hack。适合给上游提 PR/issue（官方构建产物显然有签名步骤）。
+
 ## Deviations
 
 - **launchd plist 被改了，超出「只动 bridge 源码」的原计划。** 原因见上：重编的二进制在这台机器上起不来，而编译进二进制是补丁生效的唯一官方路径。改为 bun 跑源码后，`/lite` 与 `/lite/*` 深链接都验证过返回 Homeling shell，根路径仍是旧 UI。副作用：`collie restart` / herdr plugin action `restart` 仍按 plist 里原来的 `bin/collie _exec-bridge` 语义写的；现在 plist 已不是那条命令，下次走官方 restart 会把 ProgramArguments 改回去，补丁随之失效，需要重新指回 bun。

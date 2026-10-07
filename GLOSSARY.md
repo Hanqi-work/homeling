@@ -53,6 +53,14 @@ Homeling 重写的消费级前端，挂 basePath `/lite` 与 Collie 旧 UI 共�
 **launcher 行**
 `launchers.toml` allowlist 中的一条启动命令。persona 派任务（launch 新 pane）只能使用 allowlist 内的行。
 
+## 部署不变量
+
+**zero-touch**
+Homeling 与 Collie 的共存原则：Homeling 不向 Collie 安装目录写任何文件、不改 bridge 代码、不重编译其二进制。可证伪不变量：`git -C ~/.local/share/collie status` 永远干净。新 UI 与 persona API 由 daemon 经 `tailscale serve` 的 `/lite/` path 独立暴露；见 ADR-0004。
+
+**路径分流**
+tailscale serve 同一 listener 上的 path→本地端口映射（`/` → bridge :8787，`/lite/` → daemon :8790）。是配置层动作，Homeling 只增删自己的 `/lite/`，永不写根 handler。
+
 ## 明确不是什么
 
 - **persona ≠ pane**：一个 persona 下有多个 task（panes），不是一格一人。

@@ -5,7 +5,7 @@
 >
 > 本文档是完整交接文档：阅读对象是即将在本仓库开工的 coding agent（或人类开发者）。所有产品决策、事实调研结论、视觉规格均已收敛，**按此执行即可，无需重新访谈产品决策**。
 >
-> 版本：v1.0 · 2026-10-03 · 状态：已评审定稿
+> 版本：v1.1 · 2026-10-03 · 状态：已评审定稿（v1.1：架构改采 zero-touch，见 ADR-0004；§3/§10/§12 已同步）
 
 ---
 
@@ -88,7 +88,7 @@
         └──────────────┘                           │
 ```
 
-**关键架构决策**：persona daemon 是独立小服务，Collie bridge 通过 additive 端点转发（或前端直连 daemon——开工时按 Collie 插件加载机制择一，倾向转发以复用鉴权）。
+**关键架构决策（v1.1，ADR-0004）**：**zero-touch**——Homeling 不向 Collie 安装目录写任何文件、不改一行 bridge 代码。手机侧由 `tailscale serve` 路径分流：`/` → bridge :8787（原样），`/lite/` → persona daemon :8790（新 UI + persona API + 自持 push）。daemon 照 Collie `checkAccess` 语义自建鉴权（tailscaled 对同一 listener 所有 handler 注入 identity header）。可证伪不变量：`git -C ~/.local/share/collie status` 永远干净。（下图 persona 端点连线为 v1.0 旧案，已废：zero-touch 下 daemon 独立暴露于 `/lite/`，不经 bridge 转发。）
 
 ---
 
@@ -107,11 +107,11 @@
 | D7 | persona 心智模型 | persona = 前端分类 + 常驻人格；**一个 persona 专注一类任务**（如"工作"、"生活"），下面各有项目文件夹和 pane；不是单一大 persona，也不是一个 pane = 一个 persona |
 | D8 | v1 范围 | v1 = 普通人必用集 + **原始终端镜像**（remote 排查刚需）；其余 power 功能（journal 跳转、changes/commit、worktree 三动词、crew 多机、launcher toml 自定义）留在旧 UI（新旧共存），二期迁移 |
 | D9 | 新旧 UI 共存 | 新 UI 挂 basePath（如 `/lite`），旧 UI 保留为排查保险丝 |
-| D10 | 后端改动边界 | **允许对 Collie bridge 做 additive 改动**（不改既有 API 契约，只加字段/端点）。通知摘要改造是最高杠杆。WS 二期再说，v1 以轮询为主 |
+| D10 | 后端改动边界 | ~~允许对 Collie bridge 做 additive 改动~~ **v1.1 改采 zero-touch（ADR-0004）**：不改 Collie 任何代码；通知摘要与 persona API 全部由 daemon 自持。WS 二期再说，v1 以轮询为主 |
 | D11 | persona 层架构 | **独立 persona daemon**（薄服务），不进 herdr 核心，不是纯前端概念 |
 | D12 | 多 persona | 从第一天就是 N 个 persona（Dots/Grok Bot 均如此），persona 列表即首页 |
 | D13 | agent 无关 | persona daemon 编排 herdr 的 launch/send，**不绑定 pi**；记忆注入按 agent kind 适配 |
-| D14 | persona v1 能力 | (a) 持久人格（名字/头像/固定 system prompt）+ (b) 轻量记忆（markdown 记忆文件，每会话注入）+ (c) 主动性（任务完成/需审批时主动 push，复用 Collie Web Push）。语音通话二期 |
+| D14 | persona v1 能力 | (a) 持久人格（名字/头像/固定 system prompt）+ (b) 轻量记忆（markdown 记忆文件，每会话注入）+ (c) 主动性（任务完成/需审批时主动 push；v1.1 为 daemon 自持 push 管道，ADR-0004）。语音通话二期 |
 | D15 | 项目名 | **homeling**——"住在家里的一个小家伙"。终审第 1 名（npm/GitHub 无同名产品；有异业家居商标，风险可接受）。被否决的名字：boba（印象=珍珠奶茶）、opendots（商标风险+土）、tama（AI SaaS 商标申请）、nisse（撞 nisse.app 并行 agent 平台） |
 
 ---
@@ -170,11 +170,11 @@ persona daemon
 ├── Memory Store        # 每 persona 一个 markdown 记忆文件目录（facts.md, preferences.md, projects/<space>.md …）
 ├── Memory Injection    # launch/发消息时把记忆注入上下文；按 agent kind 适配（各 agent 注入方式不同）
 ├── Activity Ledger     # persona 的活动流（task 创建/完成/失败）→ 前端 Activity 面板 + push 触发
-├── Proactivity         # 事件→动作：task 完成/失败/需审批 → Web Push（复用 Collie notifications 管道）；"定期 check-in"二期
-└── HTTP API (additive) # /api/persona/* 系列，经 Collie bridge 转发以复用鉴权
+├── Proactivity         # 事件→动作：task 完成/失败/需审批 → 自持 Web Push（独立 VAPID + debounce/coalesce/retract）；"定期 check-in"二期
+└── HTTP API            # /lite/ 路径下原生提供 /api/persona/*，不经 bridge；自持鉴权（tailscale identity header + fail-closed）
 ```
 
-### 6.2 persona API 草案（additive，不破坏 Collie 既有契约）
+### 6.2 persona API 草案（daemon 原生提供，经 /lite/ 暴露）
 
 ```
 GET    /api/persona/list              # 全部 persona + 状态(thinking/active/idle/blocked)
@@ -308,13 +308,13 @@ POST   /api/persona/:id/pause         # 对应 Dots 的 Pause
 
 ---
 
-## 10. Collie bridge additive 改动清单
+## 10. 对 Collie 的改动：零（zero-touch，ADR-0004）
 
-不改既有端点契约，只加：
+**v1.1 起本节取代原“bridge additive 改动清单”**。Homeling 不改 Collie 任何代码，原两条改动的新承担者：
 
-1. **通知摘要**：push 正文携带 agent 当前问题的具体摘要（bridge 侧从 pane 最近 transcript 提炼首行/选项文本）。现状正文只有"哪个 agent 在哪"——这是普通人友好最大杠杆。
-2. **persona 端点转发**：bridge → persona daemon 的反代（复用 Tailscale 鉴权/同源门/配对 token，daemon 自身只听 localhost）。
-3. （可选，实测轮询体验后再定）`/api/refresh` 的服务端合并节流微调。
+1. **通知摘要**：daemon 自持 push 管道直接观察 herdr socket 事件，正文天然可携带 agent 具体问题摘要。旧案（bridge 从 transcript 提炼）作废。现状正文只有"哪个 agent 在哪"——这是普通人友好最大杠杆。
+2. **persona 端点**：daemon 原生提供 `/api/persona/*`，经 `/lite/` 路径暴露，不进 bridge。
+3. **Collie 自身通知保持开启**（用户决策：双通道并存，非静音）：Collie push 与 daemon push 并存，v1 接受同一事件可能双响；用户可随时经 `POST /api/notifications/prefs` 自行静音 Collie 侧（配置层，可逆），Homeling 不代做。
 
 ---
 
@@ -336,7 +336,7 @@ POST   /api/persona/:id/pause         # 对应 Dots 的 Pause
 2. **launchers.toml allowlist**：persona 派任务只能启 allowlist 内命令；需要为常见 agent kind（claude/codex/pi）预置合理 launcher 行。
 3. **记忆注入的 agent 差异**：各 agent kind 注入系统上下文方式不同，daemon 的注入器按 kind 策略化，M2 先支持一种（建议 pi），其余降级为首条消息前缀。
 4. **homeling 商标**：npm/GitHub 可用，但存在异业（家居）商标；开源非商业使用风险低，若商业化前需清查。
-5. **Collie 上游演进**：bridge 是 additive 改动，升级 Collie 时注意 rebase；考虑给上游提 PR。
+5. **Collie 上游演进**：zero-touch 下与上游完全解耦（ADR-0004）——Collie 任意 update/install 不影响 Homeling。新 UI 走轮询 bridge 的 `/api/*`；同 origin 下 tailscale 分流后仍可达，若跨端口直连则需 daemon 反代或 CORS，M0 实测定案。
 
 ---
 
