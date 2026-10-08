@@ -302,8 +302,9 @@ export function launchPersonaTask(
   try {
     tabPane = await dispatchTaskCreation(admission, () => runtime.herdr.createTab(persona.spaceId, launcher.cwd), async (pane, result) => {
       tabPane = pane;
+      if (pane.workspace_id !== persona.spaceId) throw new HerdrRpcError("herdr.protocol", "Created task pane does not belong to the requested persona space");
       if (runtime.activity) {
-        const occurrence = await runtime.activity.register({ personaId, spaceId: persona.spaceId, paneId: pane.pane_id, title: launcher.label }, result);
+        const occurrence = await runtime.activity.register({ personaId, spaceId: pane.workspace_id, paneId: pane.pane_id, title: launcher.label || launcher.command }, result);
         occurrenceKey = occurrence.occurrenceKey;
       }
     });
