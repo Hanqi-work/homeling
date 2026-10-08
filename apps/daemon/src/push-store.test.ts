@@ -1,12 +1,12 @@
 import { test, expect } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PushStore } from './push-store.ts';
 import { SessionLock, SessionLocked } from './session-lock.ts';
 
 test('push subscriptions and preferences survive daemon restart', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'homeling-push-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-'));
   try {
     const path = join(dir, 'push.json');
     const store = new PushStore(path);

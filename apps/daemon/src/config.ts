@@ -2,7 +2,7 @@
  * Daemon configuration. Everything is environment-driven so the launchd plist stays a static
  * file (ADR-0001) and the same binary runs unchanged in tests and CI.
  */
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 export interface DaemonConfig {
@@ -51,6 +51,16 @@ function repoRoot(): string {
   return join(import.meta.dir, "..", "..", "..");
 }
 
+function readPushDirectory(value: string | undefined): string {
+  const path = value ?? join(homedir(), 'Library', 'Application Support', 'Homeling', 'push');
+  if (!isAbsolute(path)) throw new Error('HOMELING_PUSH_DIR must be an absolute external directory');
+  const directory = resolve(path);
+  for (const forbidden of [resolve(repoRoot()), join(homedir(), '.local', 'share', 'collie')]) {
+    if (directory === forbidden || directory.startsWith(`${forbidden}/`)) throw new Error('HOMELING_PUSH_DIR must be outside the repository and Collie');
+  }
+  return directory;
+}
+
 function readPort(v: string | undefined): number {
   if (!v) return DEFAULT_PORT;
   const n = Number(v);
@@ -95,7 +105,7 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     allowAnyHost,
     bridgeOrigin,
     activityPath: env.HOMELING_ACTIVITY_PATH ?? process.env.HOMELING_ACTIVITY_PATH,
-    pushDataDir: env.HOMELING_PUSH_DIR ?? process.env.HOMELING_PUSH_DIR ?? join(homedir(), 'Library', 'Application Support', 'Homeling', 'push'),
+    pushDataDir: readPushDirectory(env.HOMELING_PUSH_DIR ?? process.env.HOMELING_PUSH_DIR),
     pushSubject: env.HOMELING_PUSH_SUBJECT ?? process.env.HOMELING_PUSH_SUBJECT,
     registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
     memoryPath: env.HOMELING_MEMORY_DIR ?? process.env.HOMELING_MEMORY_DIR ?? join(env.HOMELING_DATA_DIR ?? process.env.HOMELING_DATA_DIR ?? join(homedir(), "Library", "Application Support", "Homeling"), "memory"),

@@ -24,6 +24,8 @@ interface PendingRequestBase {
   readonly paneId: string;
   /** Real daemon registry identity. Absent for legacy Collie panes; never a workspace ID. */
   readonly personaId?: string;
+  /** Trusted persistent task lifecycle, supplied only by the daemon Activity ledger. */
+  readonly taskOccurrenceKey?: string;
   readonly createdAt: string;
   readonly status: PendingRequestStatus;
 }

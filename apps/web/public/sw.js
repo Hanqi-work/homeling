@@ -126,8 +126,12 @@ self.addEventListener("notificationclick", (event) => {
       return url.origin === self.location.origin && url.pathname.startsWith("/lite/");
     });
     if (existing) {
-      const navigated = await existing.navigate(target);
-      if (navigated) { await navigated.focus(); return; }
+      try {
+        const navigated = await existing.navigate(target);
+        if (navigated) { await navigated.focus(); return; }
+      } catch {
+        // The tab may have disappeared while the click was being handled; open a fresh lite tab.
+      }
     }
     await self.clients.openWindow(target);
   })());

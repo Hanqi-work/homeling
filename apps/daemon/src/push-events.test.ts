@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ActivityLedger } from './activity-ledger.ts';
@@ -9,7 +9,7 @@ import { createDaemonSystemAdmissions } from './system-admission.ts';
 import { SessionLock } from './session-lock.ts';
 
 test('actual trusted working→done activity produces completion deep-link; exit unknown never produces failure notification', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'homeling-events-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-events-'));
   try {
     const ledger = new ActivityLedger(join(dir, 'activity.json')); const store = new PushStore(join(dir, 'push.json'));
     const caps = createDaemonSystemAdmissions(); const lock = new SessionLock(); const { token } = lock.unlock('alice'); const user = lock.admission(lock.admit(token, 'alice'));
@@ -25,5 +25,30 @@ test('actual trusted working→done activity produces completion deep-link; exit
     await ledger.register({ personaId: 'persona-real', spaceId: 'w1', paneId: 'p2', title: 'Unknown exit' }, user);
     await ledger.observe('pane_exited', { pane_id: 'p2', workspace_id: 'w1' }, caps.activityObserve);
     await consumer.drainActivity(); expect(sent).toHaveLength(1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a pending send that never completes does not block the following resolution observation', async () => {
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-observe-'));
+  try {
+    const store = new PushStore(join(dir, 'push.json'));
+    const retracted: string[] = [];
+    const sent: string[] = [];
+    const consumer = new PushEventConsumer({
+      store, activity: { list: async () => ({ occurrences: [], events: [], observation: 'live' }) },
+      registry: { get: async () => undefined },
+      output: {
+        send: async payload => { sent.push(payload.tag); return new Promise(() => {}); },
+        retract: async tag => { retracted.push(tag); },
+      },
+      admission: createDaemonSystemAdmissions().pushDeliver,
+    });
+    await consumer.observePending([
+      { state: 'pending', binding: 'opaque', personaName: 'Work', identity: 'operation', summary: 'approve operation', url: '/lite/persona/real' },
+      { state: 'resolved', binding: 'opaque' },
+    ]);
+    expect(sent).toHaveLength(1);
+    expect(retracted).toEqual(sent);
+    expect(Object.values((await store.load()).pendingOccurrences)[0]?.active).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

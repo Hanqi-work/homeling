@@ -2,7 +2,8 @@
 
 住在自己电脑上的 AI 伙伴，手机上对话、派任务、审批、查看结果。目标是 Dots / Grok Bot / Muse 式的 persona agent；基于已有 herdr / Collie，**不是 Collie fork，也不替换旧 UI**。
 
-**当前是开发中的 v1，不是正式发布。** 已接线的能力包括 pane 对话流（markdown/工具 trace）、显式发送与 history 送达确认、快捷回复、权限/选项卡片、allowlist 派任务、任务详情/只读终端镜像/中断、persona 创建与导航、持久 Markdown 记忆与编辑、STT、特殊键、PWA 基础。Activity、push、triage、头像/动效、idle-lock 完整体验和多语言由后续票增量补齐；本 README 随合入更新。记忆保存与 persona 控制已消费 #19 服务端写锁契约，未配置本机解锁凭据时 fail-closed，不提供开发绕过。PWA 真机安装与通知不能仅凭单元测试认定完成；**目前不提供 Homeling 自持 push**。
+**当前是开发中的 v1，不是正式发布。** 已接线的能力包括 pane 对话流（markdown/工具 trace）、显式发送与 history 送达确认、快捷回复、权限/选项卡片、allowlist 派任务、任务详情/只读终端镜像/中断、persona 创建与导航、持久 Markdown 记忆与编辑、STT、特殊键、PWA 基础。Activity、push、triage、头像/动效、idle-lock 完整体验和多语言由后续票增量补齐；本 README 随合入更新。记忆保存与 persona 控制已消费 #19 服务端写锁契约，未配置本机解锁凭据时 fail-closed，不提供开发绕过。PWA 真机安装与通知不能仅凭单元测试认定完成。
+已提供独立 VAPID / 订阅存储 / Web Push adapter、具体审批摘要、可信 Activity 完成/失败通知及 `/lite/` 深链接；PWA 真机安装与锁屏通知仍须人工验收。debounce / coalesce 属于后续可靠性票，不在最小链中宣称完成。
 
 正式发布门禁：完成 [PRD §9](PRD.md#9-v1-功能清单验收基线) 全部必选能力，并通过对应设备验收。README / LICENSE 就位不等于 v1 已发布。
 
@@ -76,6 +77,8 @@ curl -fsS http://127.0.0.1:8790/lite/api/health
 | `HOMELING_BRIDGE_ORIGIN` | `http://127.0.0.1:8787`，仅支持 loopback HTTP origin | 否，仅 daemon 环境支持 |
 | `HOMELING_ALLOW_ANY_HOST` | 关闭；不要在部署时打开 | 否 |
 | `HOMELING_MEMORY_DIR` | `~/Library/Application Support/Homeling/memory`（或 `HOMELING_DATA_DIR/memory`），persona Markdown 与冻结会话文件；须为绝对路径、无 symlink、owner-only | 否，仅 daemon 环境支持 |
+| `HOMELING_PUSH_SUBJECT` | 独立 VAPID 联系地址，如 `mailto:you@example.com`；未设则关闭 Homeling push | 否，需明确配置 daemon/plist |
+| `HOMELING_PUSH_DIR` | `~/Library/Application Support/Homeling/push`；独立 VAPID / 订阅 / 去重 / cursor，目录 0700、文件 0600 | 否，需明确配置 daemon/plist |
 
 推荐保持默认端口/产物/bridge 地址。非默认 `WEB_DIST` / `BRIDGE_ORIGIN` 需自行在 plist 中明确配置并重新加载，单纯 export 后运行安装脚本不生效。不要关闭 Host 检查来解决 403。
 
@@ -116,6 +119,16 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 - 其余 kind、复杂 shell wrapper 或 resume launcher 明示 **unsupported native injection**，将冻结记忆作为首条用户消息前缀降级；不是等价的 system prompt。精确注入全文仍用于 history 送达对账，不以 HTTP 成功宣称 agent 已消费。
 - 原始文档与冻结文件可能含个人信息，请勿放入仓库或日志；目录 0700、文件 0600。文件损坏/非法 UTF-8/symlink/过宽权限拒绝读写，不静默替换为空。遗留 `.write-lock` 不自动抢占；确认 daemon 全部停止且没有在途写操作后由本机操作者处理。冻结文件保留供仍运行的 pi 使用，只有确认对应会话退出后才可人工清理。
 - **人工遗留**：手机进入 persona 的 Memory，编辑并保存；在已配置的真实 pi 新会话询问记忆中的事实，确认可引用；再修改并证明旧 pane 不变、新会话读取新内容；其他 kind 检查降级提示。自动测试仅用 fake Herdr/bridge 和临时文件，未运行真实 pi、未操作 Collie/秘密/服务。
+
+### 6. 独立 Web Push（需人工锁屏验收）
+
+在 daemon 的实际环境中设置 `HOMELING_PUSH_SUBJECT=mailto:you@example.com`（可选 `HOMELING_PUSH_DIR` 指向仓库外的 owner-only 目录），再重启。**安装脚本不会自动把这两个 shell export 写进 plist**，需自行补入 plist 的 `EnvironmentVariables` 并重新加载；重装覆盖 plist 时须保留该配置。首次启动自动生成独立 VAPID key pair，只向客户端公开公钥；勿打印/提交 `vapid.json` 或订阅 auth keys，也勿复用 Collie 私钥。备份时同时保存该目录的全部状态；丢失/替换 VAPID 后原订阅不能视为仍有效，应重新订阅。
+
+手机打开 `/lite/settings`，解锁 Homeling 后点“允许并订阅”；iPhone/iPad 需先添加到主屏并从主屏打开。浏览器权限拒绝、SW 尚未就绪、daemon 未配置和业务锁 423 都有明确提示。测试通知也是用户业务写，锁定时不能发送；后台既定通知只使用 daemon 的窄 `push.deliver` capability，不续用户租约。仅支持已验证的 Apple / FCM / Mozilla push service endpoints，任意 URL 不可作为发送目的地。
+
+人工验收：锁屏后让 **daemon 注册的 persona 主 pane / 持久归属 task** 出现真实审批，正文须含具体操作；点击应进入正确 persona 主聊或 task；重复轮询、daemon 重启不重复同一 occurrence；明确解决后同内容新请求、新的 task occurrence / registry 主 pane replacement 可再通知。任务完成/失败只消费 #13 持久可信 Activity，unknown / 断连不猜结果。上游未提供可验证的同 pane 进程 incarnation：断连期间的同 pane 重启保持保守 unknown，不保证识别成新实例，不使用 session 名或 history UUID 猜测。
+
+发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；页面可向 `/lite/` SW 发送 `HOMELING_RETRACT` 按 tag 尝试本机关闭，不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
 
 ## 更新与卸载
 

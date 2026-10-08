@@ -38,7 +38,7 @@ export class ControlKeyInteraction {
   }
 }
 
-export function SpecialKeyBar({ paneId, identity, disabled, onBlockedChange }: { paneId: string; identity: string | null; disabled: boolean; onBlockedChange?: (busy: boolean) => void }): ReactElement {
+export function SpecialKeyBar({ paneId, identity, disabled, onBlockedChange, occurrenceKey }: { paneId: string; identity: string | null; disabled: boolean; onBlockedChange?: (busy: boolean) => void; occurrenceKey?: string }): ReactElement {
   const [view, setView] = useState<KeyView>(INITIAL);
   const interaction = useRef<ControlKeyInteraction | null>(null);
   const busyCallback = useRef(onBlockedChange);
@@ -68,7 +68,7 @@ export function SpecialKeyBar({ paneId, identity, disabled, onBlockedChange }: {
           <div className="mt-2 flex gap-2">
             <button type="button" className={buttonClass} onClick={() => model.cancel()}>取消</button>
             <button type="button" className={buttonClass} onClick={() => {
-              if (!locked && identity) void model.confirm((action) => sendPaneControlKey(paneId, action, identity));
+              if (!locked && identity) void model.confirm((action) => sendPaneControlKey(paneId, action, identity, occurrenceKey));
             }}>确认发送</button>
           </div>
         </div>
