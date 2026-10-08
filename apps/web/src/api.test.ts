@@ -1,12 +1,45 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
+import { PersonaAppearanceError, updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio, approvePendingRequest } from "./api.ts";
 
 import { sessionState } from "./session-state.ts";
 beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "api-fixture" }); sessionState.caughtUp(); });
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; sessionState.lock(); });
 
+test("customization sends only name/avatar PATCH and locked sessions dispatch nothing", async () => {
+  const patch = { name: "Nova", avatar: { color: "#93c5fd", character: "curious", pet: "cat" } };
+  let writes = 0;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    writes++;
+    expect(String(url)).toBe("/lite/api/persona/mira%2Fone");
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual(patch);
+    return Response.json({ persona: { id: "mira/one", ...patch } });
+  }) as typeof fetch;
+  expect(await updatePersonaAppearance("mira/one", patch)).toMatchObject(patch);
+  sessionState.lock();
+  await expect(updatePersonaAppearance("mira/one", patch)).rejects.toThrow("Unlock");
+  expect(writes).toBe(1);
+});
+
+test("customization distinguishes pre-dispatch lock from an interrupted or malformed 423", async () => {
+  const patch = { name: "Nova", avatar: { color: "#93c5fd" } };
+  for (const [body, notDispatched] of [[{ executed: false, deliveryUnknown: false }, true], [{ executed: true, deliveryUnknown: true }, false], [{}, false]] as const) {
+    sessionState.apply({ locked: false, epoch: 2, generation: "api-fixture" }); sessionState.caughtUp();
+    globalThis.fetch = (async () => Response.json({ code: "session.locked", ...body }, { status: 423 })) as unknown as typeof fetch;
+    try { await updatePersonaAppearance("mira", patch); throw new Error("expected failure"); }
+    catch (error) { expect(error).toBeInstanceOf(PersonaAppearanceError); expect((error as PersonaAppearanceError).notDispatched).toBe(notDispatched); }
+  }
+});
+
 describe("control key API", () => {
+  test("423 is classified before generic not-submitted or executed-false branches", async () => {
+    for (const [body, outcome] of [[{}, "unknown"], [{ executed: false }, "unknown"], [{ outcome: "not-submitted" }, "unknown"], [{ executed: false, deliveryUnknown: true, outcome: "not-submitted" }, "unknown"], [{ executed: false, deliveryUnknown: false }, "not-submitted"]] as const) {
+      sessionState.apply({ locked: false, epoch: 4, generation: "api-fixture" }); sessionState.caughtUp();
+      globalThis.fetch = (async () => Response.json(body, { status: 423 })) as unknown as typeof fetch;
+      expect((await sendPaneControlKey("p1", "interrupt", "identity")).outcome).toBe(outcome);
+    }
+  });
   test("posts a confirmed semantic action rather than text or raw keys", async () => {
     let posted: unknown;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -48,6 +81,13 @@ describe("STT API", () => {
 });
 
 describe("task launch API", () => {
+  test("a malformed 423 never proves that a reply, approval or control key was not dispatched", async () => {
+    const reset = () => { sessionState.apply({ locked: false, epoch: 3, generation: "api-fixture" }); sessionState.caughtUp(); };
+    globalThis.fetch = (async () => Response.json({}, { status: 423 })) as unknown as typeof fetch;
+    await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });
+    reset(); expect(await approvePendingRequest("r1", "1")).toMatchObject({ outcome: "unknown" });
+    reset(); expect(await sendPaneControlKey("p1", "interrupt", "identity")).toMatchObject({ outcome: "unknown" });
+  });
   test("a 423 interrupted reply remains unknown even though it is a client-error status", async () => {
     globalThis.fetch = (async () => Response.json({ ok: false, code: "session.interrupted", deliveryUnknown: true, textDelivered: null }, { status: 423 })) as unknown as typeof fetch;
     await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });

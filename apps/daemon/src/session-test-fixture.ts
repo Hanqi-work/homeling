@@ -6,7 +6,7 @@ import { SessionController } from "./session-controller.ts";
 import { SessionLock } from "./session-lock.ts";
 import { createDaemonSystemAdmissions } from "./system-admission.ts";
 const secret = "a".repeat(43);
-const fixtures = new WeakMap<DaemonConfig, { sessions: SessionController; cookies: Map<string, string> }>();
+const fixtures = new WeakMap<DaemonConfig, { sessions: SessionController; cookies: Map<string, { cookie: string; epoch: number; generation: string }> }>();
 /** Existing business-route tests explicitly authenticate against an injected, fake credential. */
 export async function handleUnlockedRequest(req: Request & { remoteAddress?: string | null }, cfg: DaemonConfig, fetcher?: BridgeFetch, runtime?: PersonaRuntime): Promise<Response> {
   let fixture = fixtures.get(cfg);
@@ -15,10 +15,13 @@ export async function handleUnlockedRequest(req: Request & { remoteAddress?: str
   let cookie = fixture.cookies.get(subject);
   if (!cookie) {
     const unlocked = await fixture.sessions.handle(new Request("https://fixture/lite/api/session/unlock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) }), subject);
-    cookie = unlocked!.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const state = await unlocked!.json() as { epoch: number; generation: string };
+    cookie = { cookie: unlocked!.headers.get("set-cookie")!.split(";", 1)[0]!, epoch: state.epoch, generation: state.generation };
     fixture.cookies.set(subject, cookie);
   }
-  req.headers.set("cookie", cookie);
+  req.headers.set("cookie", cookie.cookie);
+  req.headers.set("x-homeling-session-epoch", String(cookie.epoch));
+  req.headers.set("x-homeling-session-generation", cookie.generation);
   return handleRequest(req, cfg, fetcher, runtime, fixture.sessions);
 }
 export function fixtureAdmission() {

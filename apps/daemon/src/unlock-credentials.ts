@@ -52,6 +52,10 @@ export function initializeUnlockCredentials(directory: string): void {
   safeAncestors(directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   safeDirectory(directory);
+  for (const name of ["unlock-secret", "unlock-verifier.json", ".unlock-rotation-pending"]) {
+    try { lstatSync(join(directory, name)); throw new Error("Unlock state already exists; inspect it locally instead of reinitializing"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
   const secret = randomBytes(32).toString("base64url");
   exclusiveWrite(join(directory, "unlock-secret"), `${secret}\n`);
   exclusiveWrite(join(directory, "unlock-verifier.json"), serializeVerifier(secret));

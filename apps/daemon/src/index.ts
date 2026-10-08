@@ -4,6 +4,9 @@
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
 import { checkAccess, isLoopbackAddress, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import { dirname, join } from "node:path";
+import { ActivityLedger, TaskOccurrenceUnavailable } from "./activity-ledger.ts";
+import { createActivityObserver } from "./activity-observer.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText, sendControlKey } from "./control-key.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetch } from "./bridge-proxy.ts";
@@ -60,6 +63,7 @@ function personaRuntime(cfg: DaemonConfig, fetcher: BridgeFetch): PersonaRuntime
       cfg,
       fetcher,
       registry: new PersonaRegistry(cfg.registryPath),
+      activity: new ActivityLedger(cfg.activityPath ?? join(dirname(cfg.registryPath), "activity.json")),
       herdr: new HerdrSocketClient({ socketPath: cfg.herdrSocketPath }),
     };
     personaRuntimes.set(cfg, runtime);
@@ -171,6 +175,63 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
+  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop|control-key)$/);
+  if (taskAction) {
+    if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
+    const action = taskAction[2]!;
+    const method = action === "history" || action === "screen" ? "GET" : "POST";
+    if (req.method !== method) return Response.json({ error: "method not allowed" }, { status: 405, headers: { allow: method } });
+    if (method === "POST" && !jsonRequired(req)) return Response.json({ error: "application/json required" }, { status: 415 });
+    const stale = () => Response.json({ ok: false, error: "Recorded task cannot be bound to this live pane", code: "task.occurrence_unavailable", executed: false, textDelivered: false, deliveryUnknown: false }, { status: 409, headers: { "cache-control": "no-store" } });
+    try {
+      const key = decodeURIComponent(taskAction[1]!);
+      const occurrence = await runtime.activity.assertCurrent(key);
+      const target = new URL(req.url);
+      target.pathname = `/lite/api/pane/${encodeURIComponent(occurrence.paneId)}${action === "screen" ? "" : `/${action}`}`;
+      if (action !== "history") target.search = "";
+      const forwarded = new Request(target, req);
+      let refused: unknown;
+      const guardedFetch: BridgeFetch = (input, init) => {
+        if (init?.method === "GET" || init?.method === "HEAD" || !init?.method) return upstreamFetch(input, init);
+        return runtime.activity!.dispatchCurrent(key, admission!, (bound) => {
+          if (bound.paneId !== occurrence.paneId) throw new TaskOccurrenceUnavailable();
+          if (action === "reply" && controlKeyBlocksText(cfg, bound.paneId)) return Response.json({ ok: false, executed: false, textDelivered: false, deliveryUnknown: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
+          return upstreamFetch(input, init);
+        }).catch((error) => { refused = error; throw error; });
+      };
+      const response = action === "control-key" ? await sendControlKey(forwarded, cfg, guardedFetch, requestStore(cfg)) : await proxyBridgeRequest(forwarded, cfg, guardedFetch);
+      if (refused instanceof SessionLocked) return sessionRefusal();
+      if (refused instanceof TaskOccurrenceUnavailable) return stale();
+      if (method === "POST") return response;
+      const body = await response.arrayBuffer();
+      await runtime.activity.assertCurrent(key);
+      return new Response(body, { status: response.status, headers: response.headers });
+    } catch (error) {
+      if (error instanceof SessionLocked) return sessionRefusal();
+      if (error instanceof TaskOccurrenceUnavailable) return stale();
+      return Response.json({ error: error instanceof Error ? error.message : "Task unavailable", code: "task.unavailable" }, { status: 502 });
+    }
+  }
+  const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
+  const occurrenceMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)$/);
+  if (activityMatch || occurrenceMatch) {
+    if (req.method !== "GET") return Response.json({ error: "method not allowed" }, { status: 405, headers: { allow: "GET" } });
+    if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
+    try {
+      if (activityMatch) {
+        const id = decodeURIComponent(activityMatch[1]!);
+        const activity = await runtime.activity.list(id);
+        if (activity.occurrences.length === 0 && !await runtime.registry.get(id)) return Response.json({ error: "persona not found" }, { status: 404 });
+        return Response.json(activity, { headers: { "cache-control": "no-store" } });
+      }
+      const key = decodeURIComponent(occurrenceMatch![1]!);
+      const task = await runtime.activity.task(key);
+      if (!task) return Response.json({ error: "task occurrence not found" }, { status: 404 });
+      return Response.json(task, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Activity unavailable" }, { status: 502 });
+    }
+  }
   if (isMemoryPath(pathname)) {
     return (await handleMemoryRequest(req, { registry: runtime.registry, memory: memoryStoreOf(runtime) }, admission))!;
   }
@@ -275,7 +336,11 @@ export async function handleRequest(
       if (typeof body.personaId !== "string" || typeof body.command !== "string") {
         return Response.json({ ok: false, error: "personaId and command required", code: "request.invalid" }, { status: 400 });
       }
-      return launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!);
+      try { return await launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!); }
+      catch (error) {
+        if (error instanceof SessionLocked) return sessionRefusal();
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: "launch.failed" }, { status: 502 });
+      }
     }
   }
 
@@ -316,6 +381,8 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
   });
   const runtime = personaRuntime(cfg, globalThis.fetch);
   const system = createDaemonSystemAdmissions();
+  const activityObserver = createActivityObserver(runtime.activity!, runtime.herdr, system.activityObserve);
+  runtime.observeTask = (paneId) => activityObserver.watch(paneId);
   void recoverPersonas(runtime, system.personaRecovery).catch((error: unknown) => {
     console.error(`[homeling-daemon] persona recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
   });

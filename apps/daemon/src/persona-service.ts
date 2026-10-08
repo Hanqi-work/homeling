@@ -5,6 +5,8 @@ import { prepareMemorySession, memoryMessageText, injectedMessagePresentation } 
 import { SessionLocked, lockedResponse, type MutationAdmission } from "./session-lock.ts";
 import type { SystemAdmission } from "./system-admission.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
+import type { ActivityLedger } from "./activity-ledger.ts";
+import { dispatchTaskCreation } from "./mutation-result.ts";
 import type { DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText } from "./control-key.ts";
 import { HerdrRpcError, type HerdrCreatedSpace, type HerdrPane, type HerdrPort, type HerdrSnapshot } from "./herdr-client.ts";
@@ -13,6 +15,8 @@ import { newPersonaId, PersonaRegistry, type Persona, type PersonaAvatar } from 
 
 export interface PersonaRuntime {
   readonly registry: PersonaRegistry;
+  readonly activity?: ActivityLedger;
+  observeTask?: (paneId: string) => Promise<void>;
   readonly herdr: HerdrPort;
   readonly cfg: DaemonConfig;
   readonly fetcher: BridgeFetch;
@@ -60,14 +64,16 @@ function safeId(id: string): boolean {
   return /^[A-Za-z0-9._~-]{1,128}$/.test(id);
 }
 
-function statusOf(persona: Persona, snapshot: HerdrSnapshot): "thinking" | "active" | "idle" | "blocked" {
-  if (persona.paused) return "idle";
-  const agent = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId);
-  const status = agent?.agent_status;
-  if (status === "blocked") return "blocked";
-  if (status === "working") return "thinking";
-  if (status === "idle" || status === "done") return "idle";
-  return snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId) ? "active" : "idle";
+function statusOf(persona: Persona, snapshot: HerdrSnapshot): Pick<import("@homeling/contracts").PersonaView, "status" | "statusSource"> {
+  if (!snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId)) return { status: "idle", statusSource: "missing" };
+  const status = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId)?.agent_status;
+  switch (status) {
+    case "blocked": return { status: persona.paused ? "idle" : "blocked", statusSource: "agent" };
+    case "working": return { status: persona.paused ? "idle" : "thinking", statusSource: "agent" };
+    case "idle":
+    case "done": return { status: "idle", statusSource: "agent" };
+    default: return { status: persona.paused ? "idle" : "active", statusSource: "pane" };
+  }
 }
 
 export async function getLaunchers(cfg: DaemonConfig, fetcher: BridgeFetch, login?: string | null): Promise<LauncherList> {
@@ -175,7 +181,7 @@ export async function createPersona(
 
 export async function listPersonas(runtime: PersonaRuntime): Promise<readonly (Persona & { status: string })[]> {
   const [personas, snapshot] = await Promise.all([runtime.registry.list(), runtime.herdr.snapshot()]);
-  return personas.map((persona) => ({ ...persona, status: statusOf(persona, snapshot) }));
+  return personas.map((persona) => ({ ...persona, ...statusOf(persona, snapshot) }));
 }
 
 export function updatePersona(
@@ -339,10 +345,27 @@ export function launchPersonaTask(
   const launcher = launchers.launchers.find((row) => row.command === command);
   if (!launcher) return Response.json({ ok: false, error: "Launcher is not allowlisted", code: "launch.not_allowlisted" }, { status: 400 });
   let tabPane: HerdrPane | undefined;
+  let occurrenceKey: string | undefined;
   try {
-    tabPane = await admission.dispatch(() => runtime.herdr.createTab(persona.spaceId, launcher.cwd));
+    tabPane = await dispatchTaskCreation(admission, () => runtime.herdr.createTab(persona.spaceId, launcher.cwd), async (pane, result) => {
+      tabPane = pane;
+      if (pane.workspace_id !== persona.spaceId) throw new HerdrRpcError("herdr.protocol", "Created task pane does not belong to the requested persona space");
+      if (runtime.activity) {
+        const occurrence = await runtime.activity.register({ personaId, spaceId: pane.workspace_id, paneId: pane.pane_id, title: launcher.label || launcher.command }, result);
+        occurrenceKey = occurrence.occurrenceKey;
+      }
+    });
+    if (runtime.activity) {
+      if (!runtime.observeTask) throw new Error("Activity observer is unavailable; task was not started");
+      await runtime.observeTask(tabPane.pane_id);
+    }
     await startLauncher(runtime, launcher, tabPane.pane_id, admission);
   } catch (error) {
+    const unknown = error instanceof SessionLocked || error instanceof HerdrRpcError && ["herdr.timeout", "herdr.unavailable", "herdr.protocol", "herdr.agent_start_timeout"].includes(error.code);
+    if (occurrenceKey && !unknown) {
+      try { await runtime.activity!.fail(occurrenceKey, `Task launch failed: ${error instanceof Error ? error.message : String(error)}`, admission); }
+      catch (registrationError) { console.error("[homeling-daemon] could not register task launch failure", registrationError); }
+    }
     let paneStillOpen = false;
     if (tabPane) {
       try { await runtime.herdr.closePane(tabPane.pane_id); }
@@ -354,7 +377,8 @@ export function launchPersonaTask(
       createdAt: new Date().toISOString(),
       reason: `task launch failed: ${error instanceof Error ? error.message : String(error)}`,
     });
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: error instanceof HerdrRpcError ? error.code : "launch.failed" }, { status: 502 });
+    if (error instanceof SessionLocked) throw error;
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: error instanceof HerdrRpcError ? error.code : "launch.failed", ...(unknown ? { deliveryUnknown: true } : {}) }, { status: 502 });
   }
   const snapshot = await runtime.herdr.snapshot().catch(() => null);
   const workspaceLabel = snapshot?.workspaces.find((space) => space.workspace_id === persona.spaceId)?.label ?? persona.name;
@@ -476,12 +500,16 @@ export function createEventObserver(runtime: PersonaRuntime, admission: SystemAd
   return { close() { closed = true; clearTimeout(retryTimer); clearInterval(reconcileTimer); stream?.close(); } };
 }
 
+function validAvatarFields(avatar: Record<string, unknown>): boolean {
+  return ["character", "pet"].every((key) => avatar[key] === undefined || (typeof avatar[key] === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(avatar[key])));
+}
+
 export function validatePersonaInput(value: unknown): { name: string; avatar: PersonaAvatar; systemPrompt?: string; launcherCommand?: string } | null {
   if (!value || typeof value !== "object") return null;
   const body = value as Record<string, unknown>;
   if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 80) return null;
   const rawAvatar = body.avatar && typeof body.avatar === "object" ? body.avatar as Record<string, unknown> : {};
-  if (typeof rawAvatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(rawAvatar.color)) return null;
+  if (typeof rawAvatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(rawAvatar.color) || !validAvatarFields(rawAvatar)) return null;
   if (body.systemPrompt !== undefined && (typeof body.systemPrompt !== "string" || body.systemPrompt.length > 20_000)) return null;
   if (body.launcherCommand !== undefined && (typeof body.launcherCommand !== "string" || body.launcherCommand.length > 2_000)) return null;
   return {
@@ -502,8 +530,8 @@ export function validatePersonaPatch(value: unknown): { name?: string; avatar?: 
   }
   if (body.avatar !== undefined) {
     const avatar = body.avatar as Record<string, unknown> | null;
-    if (!avatar || typeof avatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(avatar.color)) return null;
-    patch.avatar = { color: avatar.color };
+    if (!avatar || typeof avatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(avatar.color) || !validAvatarFields(avatar)) return null;
+    patch.avatar = { color: avatar.color, ...(typeof avatar.character === "string" ? { character: avatar.character } : {}), ...(typeof avatar.pet === "string" ? { pet: avatar.pet } : {}) };
   }
   if (body.systemPrompt !== undefined) {
     if (typeof body.systemPrompt !== "string" || body.systemPrompt.length > 20_000) return null;

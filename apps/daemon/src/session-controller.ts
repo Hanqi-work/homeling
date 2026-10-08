@@ -56,6 +56,10 @@ export class SessionController {
   }
   admission(req: Request, subject: string): MutationAdmission {
     if (!this.refreshVerifier()) throw new SessionLocked();
+    const expected = req.headers.get("x-homeling-session-epoch");
+    const epoch = expected && expected.length <= 16 && /^[1-9][0-9]*$/.test(expected) ? Number(expected) : NaN;
+    const state = this.lock.state(this.token(req), subject);
+    if (!Number.isSafeInteger(epoch) || state.locked || state.epoch !== epoch || req.headers.get("x-homeling-session-generation") !== this.generation) throw new SessionLocked();
     const lease = this.lock.admission(this.lock.admit(this.token(req), subject));
     const assert = () => { if (!this.refreshVerifier()) throw new SessionLocked(); lease.assert(); };
     return { assert, dispatch<T>(effect: () => T): T { assert(); return lease.dispatch(effect); } };
@@ -83,7 +87,10 @@ export class SessionController {
       return Response.json({ locked: true, generation: this.generation, serverNow: this.now() }, { headers: noStore });
     }
     if (pathname === `${SESSION_PATH}/activity`) {
-      try { return Response.json({ ...this.lock.activity(this.token(req), subject), generation: this.generation, serverNow: this.now() }, { headers: noStore }); }
+      try {
+        this.admission(req, subject).assert();
+        return Response.json({ ...this.lock.activity(this.token(req), subject), generation: this.generation, serverNow: this.now() }, { headers: noStore });
+      }
       catch { return lockedResponse(); }
     }
     // Count attempts before parsing/hashing, independent of cookie/session rotation.

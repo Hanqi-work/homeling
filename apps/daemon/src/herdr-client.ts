@@ -43,7 +43,7 @@ export interface HerdrPort {
   closePane(paneId: string): Promise<void>;
   renameSpace(workspaceId: string, label: string): Promise<void>;
   snapshot(): Promise<HerdrSnapshot>;
-  subscribe(onEvent: (event: string, data: unknown) => void, onDown: (reason: string) => void): { close(): void };
+  subscribe(onEvent: (event: string, data: unknown) => void, onDown: (reason: string) => void, options?: { paneIds: readonly string[]; onUp?: () => void }): { close(): void };
 }
 
 function connect(socketPath: string, timeoutMs: number): Promise<Socket> {
@@ -162,15 +162,24 @@ export class HerdrSocketClient implements HerdrPort {
     return result.snapshot;
   }
 
-  subscribe(onEvent: (event: string, data: unknown) => void, onDown: (reason: string) => void): { close(): void } {
+  subscribe(onEvent: (event: string, data: unknown) => void, onDown: (reason: string) => void, options?: { paneIds: readonly string[]; onUp?: () => void }): { close(): void } {
     let socket: Socket | undefined;
     let closed = false;
+    let acknowledged = false;
     let buffer = "";
+    const id = randomUUID();
     const decoder = new StringDecoder("utf8");
     const close = () => {
       closed = true;
+      clearTimeout(ackTimer);
       socket?.destroy();
     };
+    const down = (reason: string) => {
+      if (closed) return;
+      close();
+      onDown(reason);
+    };
+    const ackTimer = setTimeout(() => down("Herdr event subscription acknowledgement timed out"), this.timeoutMs);
     void connect(this.socketPath, this.timeoutMs).then((connected) => {
       if (closed) return connected.destroy();
       socket = connected;
@@ -182,21 +191,31 @@ export class HerdrSocketClient implements HerdrPort {
           const line = buffer.slice(0, newline);
           buffer = buffer.slice(newline + 1);
           try {
-            const message = JSON.parse(line) as { event?: string; data?: unknown };
-            if (message.event) onEvent(message.event, message.data);
+            const message = JSON.parse(line) as { id?: string; result?: { type?: string }; error?: { message?: string }; event?: unknown; data?: unknown };
+            if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error("Invalid frame");
+            if (message.error) { down(`Herdr rejected event subscription: ${message.error.message ?? "unknown error"}`); return; }
+            if (message.result) {
+              if (message.id !== id || message.result.type !== "subscription_started" || acknowledged) throw new Error("Invalid subscription ack");
+              acknowledged = true;
+              clearTimeout(ackTimer);
+              options?.onUp?.();
+            } else if (acknowledged && typeof message.event === "string" && message.data && typeof message.data === "object" && !Array.isArray(message.data)) {
+              onEvent(message.event, message.data);
+            } else throw new Error("Invalid event envelope");
           } catch {
-            onDown("Invalid Herdr event frame");
-            close();
+            down("Invalid Herdr event frame");
+            return;
           }
         }
       });
-      socket.once("error", (error) => { if (!closed) onDown(`Herdr event stream failed: ${error.message}`); });
-      socket.once("close", () => { if (!closed) onDown("Herdr event stream closed"); });
-      socket.write(`${JSON.stringify({ id: randomUUID(), method: "events.subscribe", params: { subscriptions: [
+      socket.once("error", (error) => down(`Herdr event stream failed: ${error.message}`));
+      socket.once("close", () => down("Herdr event stream closed"));
+      socket.write(`${JSON.stringify({ id, method: "events.subscribe", params: { subscriptions: [
         { type: "pane.closed" }, { type: "pane.exited" }, { type: "pane.created" },
         { type: "workspace.closed" }, { type: "workspace.renamed" },
+        ...[...new Set(options?.paneIds ?? [])].map((pane_id) => ({ type: "pane.agent_status_changed", pane_id })),
       ] } })}\n`);
-    }).catch((error: unknown) => { if (!closed) onDown(error instanceof Error ? error.message : String(error)); });
+    }).catch((error: unknown) => down(error instanceof Error ? error.message : String(error)));
     return { close };
   }
 }
