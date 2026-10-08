@@ -38,9 +38,45 @@ test("scoped history rechecks the real occurrence after upstream body arrival an
   const rejected = await reading;
   expect(rejected.status).toBe(409);
   expect(await rejected.text()).not.toContain("NEWER TASK SECRET");
-  const write = await handleUnlockedRequest(req("reply", "POST"), cfg, fetcher, runtime);
-  expect(write.status).toBe(409);
+  for (const action of ["reply", "stop", "control-key"]) {
+    const write = await handleUnlockedRequest(req(action, "POST"), cfg, fetcher, runtime);
+    expect(write.status).toBe(409);
+  }
   expect(writes).toBe(0);
+});
+
+test("scoped replies share the native cancellation barrier while busy and after an unknown key result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "homeling-scoped-cancel-")); roots.push(root);
+  const cfg = { ...daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: join(root, "registry.json") }), trustedUsers: ["me"], tailscaleHost: "home.tail.test" };
+  const activity = new ActivityLedger(join(root, "activity.json"));
+  const lock = new SessionLock(); const { token } = lock.unlock("test");
+  const occurrence = await activity.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, lock.admission(lock.admit(token, "test")));
+  activity.live(createDaemonSystemAdmissions().activityObserve);
+  const begun = Promise.withResolvers<void>(); const held = Promise.withResolvers<Response>();
+  let replies = 0;
+  const pane = { paneId: "p", workspaceId: "s", tabId: "t", agent: "claude", cwd: "/", sessionName: "session", status: "working" };
+  const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      if (String(input).endsWith("/reply")) { replies++; return Response.json({ ok: true }); }
+      begun.resolve(); return held.promise;
+    }
+    return String(input).endsWith("/snapshot") ? Response.json({ bridge: "connected", agents: [pane], shellPanes: [] }) : Response.json({ paneId: "p", text: "Working on task", truncated: false });
+  };
+  const unavailable = (): never => { throw new Error("Herdr must not be used"); };
+  const runtime: PersonaRuntime = { cfg, registry: new PersonaRegistry(cfg.registryPath), activity, fetcher, herdr: { createSpace: unavailable, createTab: unavailable, readPane: unavailable, sendText: unavailable, sendKeys: unavailable, closePane: unavailable, renameSpace: unavailable, snapshot: unavailable, subscribe: unavailable } };
+  const req = (path: string, body: unknown) => Object.assign(new Request(`https://home.tail.test${path}`, { method: "POST", headers: { host: "home.tail.test", origin: "https://home.tail.test", "tailscale-user-login": "me", "content-type": "application/json" }, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
+  const key = handleUnlockedRequest(req("/lite/api/pane/p/control-key", { action: "interrupt", confirmed: true, identity: JSON.stringify(["p", "s", "t", "claude", "/", "session", null, null]) }), cfg, fetcher, runtime);
+  await begun.promise;
+  const reply = () => handleUnlockedRequest(req(`/lite/api/activity/task/${occurrence.occurrenceKey}/reply`, { text: "must not enter a cancelled input", submit: true }), cfg, fetcher, runtime);
+  const busy = await reply();
+  expect(busy.status).toBe(409);
+  expect(await busy.json()).toMatchObject({ executed: false, textDelivered: false });
+  held.reject(new Error("key outcome lost"));
+  expect(await (await key).json()).toMatchObject({ outcome: "unknown" });
+  const unknown = await reply();
+  expect(unknown.status).toBe(409);
+  expect(await unknown.json()).toMatchObject({ executed: false, textDelivered: false });
+  expect(replies).toBe(0);
 });
 
 test("authenticated Activity API reads durable history without triggering Herdr or recovery writes", async () => {

@@ -46,10 +46,12 @@ test("one event I/O failure records a gap, recovers the queue and never fabricat
     const session = new SessionLock(); const { token } = session.unlock("test");
     await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, session.admission(session.admit(token, "test")));
     await observer.watch("p");
+    const oldGenerationEvent = event;
     event("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "working" });
     await observer.flush();
     expect((await ledger.list()).observation).toBe("gap");
     await recovered.promise;
+    oldGenerationEvent("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "done" });
     event("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "done" });
     await observer.flush();
     expect(ledger.calls).toBe(2);

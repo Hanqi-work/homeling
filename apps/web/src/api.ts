@@ -211,9 +211,9 @@ export interface ControlKeyResult {
 }
 
 /** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
-export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string): Promise<ControlKeyResult> {
+export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string, occurrenceKey?: string): Promise<ControlKeyResult> {
   try {
-    const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
+    const response = await fetch(`${API_PREFIX}${taskPanePath(paneId, "control-key", occurrenceKey)}`, {
       method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
     });
@@ -225,6 +225,7 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
         return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
       }
     }
+    if (value && typeof value === "object" && "executed" in value && value.executed === false) return { outcome: "not-submitted", error: "error" in value && typeof value.error === "string" ? value.error : `control key ${response.status}` };
     return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
   } catch {
     return { outcome: "unknown", error: "Network lost or timed out; do not repeat the key" };

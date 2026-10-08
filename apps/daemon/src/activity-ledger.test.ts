@@ -135,6 +135,41 @@ test("each real observation gap remains recorded even when the latest task alrea
   expect((await ledger.ownership("p"))?.status).toBe("completed");
 });
 
+test("scoped user dispatch releases the observer before network completion and stale dispatch has no effect", async () => {
+  const { ledger, admission, observer } = await fixture();
+  const occurrence = await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, admission);
+  ledger.live(observer);
+  const begun = Promise.withResolvers<void>(); const held = Promise.withResolvers<string>();
+  let effects = 0;
+  const inFlight = ledger.dispatchCurrent(occurrence.occurrenceKey, admission, () => { effects++; begun.resolve(); return held.promise; });
+  await begun.promise;
+  await ledger.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "working" }, observer);
+  await ledger.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "done" }, observer);
+  held.resolve("accepted before completion");
+  expect(await inFlight).toBe("accepted before completion");
+  await expect(ledger.dispatchCurrent(occurrence.occurrenceKey, admission, () => { effects++; })).rejects.toThrow("cannot be reliably bound");
+  expect(effects).toBe(1);
+  expect((await ledger.task(occurrence.occurrenceKey))?.liveAvailable).toBe(false);
+});
+
+test("loaded pane bindings cannot change owner or retain an older active occurrence", async () => {
+  const { ledger, path, observer, admission } = await fixture();
+  await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, admission);
+  for (const status of ["working", "done", "working", "done"]) await ledger.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: status }, observer);
+  const valid = await readFile(path, "utf8");
+  type FixtureState = { occurrences: Array<{ occurrenceKey: string; personaId: string; spaceId: string; status: string }>; events: Array<{ occurrenceKey: string; personaId: string; kind: string; sequence: number }> };
+  const mutations: Array<(state: FixtureState) => void> = [
+    (state) => { const key = state.occurrences[1]!.occurrenceKey; state.occurrences[1]!.personaId = "foreign"; for (const event of state.events) if (event.occurrenceKey === key) event.personaId = "foreign"; },
+    (state) => { state.occurrences[1]!.spaceId = "foreign-space"; },
+    (state) => { state.occurrences[0]!.status = "active"; state.events = state.events.filter((e) => e.kind !== "task.completed" || e.occurrenceKey !== state.occurrences[0]!.occurrenceKey); state.events.forEach((e, index) => { e.sequence = index + 1; }); },
+    (state) => { state.occurrences.forEach((o) => { o.status = "active"; }); state.events = state.events.filter((e) => e.kind !== "task.completed"); state.events.forEach((e, index) => { e.sequence = index + 1; }); },
+  ];
+  for (const mutate of mutations) {
+    const state = JSON.parse(valid) as FixtureState; mutate(state); await writeFile(path, JSON.stringify(state));
+    await expect(new ActivityLedger(path).list()).rejects.toThrow("Invalid activity ledger");
+  }
+});
+
 test("task creation commits durable persona ownership before live subscribers are notified", async () => {
   const { ledger, path, admission } = await fixture();
   const delivered: string[] = [];
