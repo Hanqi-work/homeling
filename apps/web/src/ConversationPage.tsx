@@ -18,6 +18,9 @@ import { TaskChip } from "./TaskChip.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
+import { useSessionSnapshot } from "./SessionBoundary.tsx";
+import { sessionState } from "./session-state.ts";
+
 type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 
 interface PaneConversationProps {
@@ -32,6 +35,7 @@ function failureLabel(message: OutgoingMessage): string {
 }
 
 function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactElement {
+  const lockSession = useSessionSnapshot();
   const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
@@ -57,12 +61,19 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   const [sendBlocked, setSendBlocked] = useState(false);
   const sendBlockedRef = useRef(false);
   const blockedMessageIds = useRef(new Set<string>());
-  const sendQueue = useRef(createDeferredSendQueue());
+  const sendQueue = useRef(createDeferredSendQueue(sessionState.admit, (id) => {
+    dispatch({ type: "outgoing-failed", paneId, id, textDelivered: false });
+    queuedMessageIds.current.delete(id);
+  }));
   const sendAttemptSequence = useRef(0);
   const queuedMessageIds = useRef(new Set<string>());
   const requestSequence = useRef(0);
   const latestSuccessSequence = useRef(0);
   const activeController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!lockSession.ready) sendQueue.current.suspend();
+  }, [lockSession.ready, lockSession.epoch]);
 
   function setComposerBlocked(blocked: boolean): void {
     sendBlockedRef.current = blocked;
@@ -109,6 +120,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   }
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       const requestId = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId });
@@ -127,9 +139,10 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
       if (activeController.current === session.controller) activeController.current = null;
       session.stop();
     };
-  }, [paneId]);
+  }, [paneId, lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const controller = new AbortController();
     void fetchLaunchers(controller.signal).then((response) => {
       if (!controller.signal.aborted) {
@@ -151,7 +164,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
       controller.abort();
       session.stop();
     };
-  }, []);
+  }, [lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
     saveConversationTasks(taskStorageKey, tasks);
@@ -184,6 +197,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   }
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       const pollVersion = requestPollState.current!.begin();
       try {
@@ -211,7 +225,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
       }
     }, 2000);
     return () => session.stop();
-  }, [paneId]);
+  }, [paneId, lockSession.ready, lockSession.epoch]);
 
   function keepSettledRequest(request: PendingRequest): void {
     requestPollState.current!.settle(request.id);
