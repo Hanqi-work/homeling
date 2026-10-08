@@ -1,4 +1,14 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+
+import { sessionState } from "./session-state.ts";
+
+/** UI admission complements, never replaces, the daemon cookie/epoch gate. */
+export async function sessionMutationFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  try { sessionState.admit()(); } catch { throw new ReplyRequestError("Unlock Homeling and confirm this action", false); }
+  const response = await fetch(input, init);
+  if (response.status === 423) sessionState.lock();
+  return response;
+}
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
@@ -45,13 +55,43 @@ export function fetchPersonas(signal?: AbortSignal): Promise<PersonaListResponse
 }
 
 export async function createPersona(input: { name: string; avatar: { color: string }; systemPrompt?: string }): Promise<PersonaView> {
-  const response = await fetch(`${API_PREFIX}persona`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}persona`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   const result = await response.json().catch(() => null) as { persona?: PersonaView; error?: string } | null;
   if (!response.ok || !result?.persona) throw new Error(result?.error ?? `Create persona failed (${response.status})`);
+  return result.persona;
+}
+
+export interface PersonaAppearancePatch {
+  readonly name: string;
+  readonly avatar: PersonaAvatar;
+}
+
+export class PersonaAppearanceError extends Error {
+  constructor(message: string, readonly notDispatched = false) {
+    super(message);
+    this.name = "PersonaAppearanceError";
+  }
+}
+
+export async function updatePersonaAppearance(personaId: string, patch: PersonaAppearancePatch): Promise<PersonaRecord> {
+  let response: Response;
+  try {
+    response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+      method: "PATCH", headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ name: patch.name, avatar: patch.avatar }),
+    });
+  } catch (error) {
+    if (error instanceof ReplyRequestError && error.textDelivered === false) throw new PersonaAppearanceError(error.message, true);
+    throw new PersonaAppearanceError("Save outcome unknown. Check saved customization before retrying.");
+  }
+  const result = await response.json().catch(() => null) as { persona?: PersonaRecord; error?: string } | null;
+  if (!response.ok || result?.persona?.id !== personaId) {
+    throw new PersonaAppearanceError(result?.error ?? `Save could not be confirmed (${response.status}). Check saved customization.`, response.status === 423 || [400, 401, 403, 404, 415].includes(response.status));
+  }
   return result.persona;
 }
 
@@ -79,17 +119,17 @@ export async function deletePersona(personaId: string): Promise<PersonaDeleteRes
 }
 
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
-  const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean; personaConfirmationText?: string } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean; personaConfirmationText?: string } = {};
   try { result = await response.json() as typeof result; } catch { /* use HTTP fallback */ }
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `message ${response.status}`,
-      typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
       result.personaConfirmationText,
     );
   }
@@ -114,7 +154,7 @@ export async function launchTask(launcher: Launcher, paneId?: string, personaId?
     : paneId === undefined
       ? { command: launcher.command }
       : { command: launcher.command, paneId };
-  const response = await fetch(`${API_PREFIX}launch`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}launch`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -142,18 +182,21 @@ export interface ApprovalResponse {
 }
 
 export async function approvePendingRequest(requestId: string, optionId: string): Promise<ApprovalResponse> {
-  const response = await fetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ optionId }),
   });
-  let result: ApprovalResponse | null = null;
+  let result: (ApprovalResponse & { deliveryUnknown?: boolean }) | null = null;
   try {
     result = await response.json() as ApprovalResponse;
   } catch {
     // The status below still distinguishes a stale request from a failed network write.
   }
-  if (result) return result;
+  if (response.status === 423) return result?.deliveryUnknown === true
+    ? { status: "resolved", outcome: "unknown" }
+    : { status: "pending", outcome: "not-submitted" };
+  if (result && ["pending", "resolved", "expired"].includes(result.status)) return result;
   throw new Error(`approval ${response.status}`);
 }
 
@@ -175,7 +218,7 @@ export function fetchPaneScreen(paneId: string, signal?: AbortSignal): Promise<P
 }
 
 export async function stopPaneTask(paneId: string): Promise<void> {
-  const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: "{}",
@@ -229,12 +272,12 @@ export class ReplyRequestError extends Error {
 
 /** Submit text to an existing Collie pane; history polling, not this response, confirms delivery. */
 export async function sendPaneReply(paneId: string, text: string): Promise<void> {
-  const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/reply`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/reply`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text, submit: true }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean } = {};
   try {
     result = await response.json() as typeof result;
   } catch {
@@ -243,7 +286,7 @@ export async function sendPaneReply(paneId: string, text: string): Promise<void>
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `reply ${response.status}`,
-      typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
     );
   }
 }

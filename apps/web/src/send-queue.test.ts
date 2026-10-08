@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
+import { SessionStateStore } from "./session-state.ts";
 import { historyReducer, initialHistoryState } from "./history-reducer.ts";
 import type { TranscriptEntry } from "@homeling/contracts";
 
@@ -8,6 +9,22 @@ async function flushQueue(): Promise<void> {
 }
 
 describe("createDeferredSendQueue", () => {
+  test("history unblock after locking and unlocking never replays deferred writes from the old epoch", async () => {
+    const session = new SessionStateStore();
+    session.apply({ locked: false, epoch: 1, generation: "boot" }); session.caughtUp();
+    const queue = createDeferredSendQueue(session.admit);
+    const writes: string[] = [];
+    queue.block("unknown");
+    await queue.enqueue("deferred", async () => { writes.push("deferred"); });
+    session.lock();
+    queue.unblock("unknown");
+    await flushQueue();
+    session.apply({ locked: false, epoch: 2, generation: "boot" }); session.caughtUp();
+    await flushQueue();
+    expect(writes).toEqual([]);
+    await queue.enqueue("explicit-new-action", async () => { writes.push("new"); });
+    expect(writes).toEqual(["new"]);
+  });
   test("runs concurrent sends one at a time in enqueue order", async () => {
     const queue = createDeferredSendQueue();
     const order: string[] = [];

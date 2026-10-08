@@ -14,5 +14,7 @@ export function personaStatusLabel(persona: PersonaView, stale = false): string 
   if (stale) return "Status unavailable · last known data";
   if (persona.needsAttention) return "Needs attention";
   if (persona.paused) return "Paused";
+  if (persona.statusSource === "missing") return "Main pane unavailable";
+  if (persona.statusSource === "pane") return "Active · agent status unavailable";
   return { thinking: "Thinking", active: "Active", idle: "Idle", blocked: "Blocked · needs you" }[persona.status];
 }

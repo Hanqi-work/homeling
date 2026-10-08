@@ -1,8 +1,26 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
 
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "api-fixture" }); sessionState.caughtUp(); });
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => { globalThis.fetch = originalFetch; sessionState.lock(); });
+
+test("customization sends only name/avatar PATCH and locked sessions dispatch nothing", async () => {
+  const patch = { name: "Nova", avatar: { color: "#93c5fd", character: "curious", pet: "cat" } };
+  let writes = 0;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    writes++;
+    expect(String(url)).toBe("/lite/api/persona/mira%2Fone");
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual(patch);
+    return Response.json({ persona: { id: "mira/one", ...patch } });
+  }) as typeof fetch;
+  expect(await updatePersonaAppearance("mira/one", patch)).toMatchObject(patch);
+  sessionState.lock();
+  await expect(updatePersonaAppearance("mira/one", patch)).rejects.toThrow("Unlock");
+  expect(writes).toBe(1);
+});
 
 describe("control key API", () => {
   test("posts a confirmed semantic action rather than text or raw keys", async () => {
@@ -46,6 +64,11 @@ describe("STT API", () => {
 });
 
 describe("task launch API", () => {
+  test("a 423 interrupted reply remains unknown even though it is a client-error status", async () => {
+    globalThis.fetch = (async () => Response.json({ ok: false, code: "session.interrupted", deliveryUnknown: true, textDelivered: null }, { status: 423 })) as unknown as typeof fetch;
+    await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });
+    expect(sessionState.get().locked).toBe(true);
+  });
   test("reads launcher rows and posts only the selected allowlist command", async () => {
     const requests: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

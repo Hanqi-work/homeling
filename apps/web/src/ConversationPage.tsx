@@ -20,12 +20,16 @@ import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
+import { useSessionSnapshot } from "./SessionBoundary.tsx";
+import { sessionState } from "./session-state.ts";
+
 type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 
 interface PaneConversationProps {
   paneId: string;
   personaId?: string;
   persona?: PersonaView;
+  personaStale?: boolean;
 }
 
 function failureLabel(message: OutgoingMessage): string {
@@ -34,7 +38,8 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId, personaId, persona }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId, persona, personaStale = false }: PaneConversationProps): ReactElement {
+  const lockSession = useSessionSnapshot();
   const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
@@ -63,12 +68,19 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   const [sendBlocked, setSendBlocked] = useState(false);
   const sendBlockedRef = useRef(false);
   const blockedMessageIds = useRef(new Set<string>());
-  const sendQueue = useRef(createDeferredSendQueue());
+  const sendQueue = useRef(createDeferredSendQueue(sessionState.admit, (id) => {
+    dispatch({ type: "outgoing-failed", paneId, id, textDelivered: false });
+    queuedMessageIds.current.delete(id);
+  }));
   const sendAttemptSequence = useRef(0);
   const queuedMessageIds = useRef(new Set<string>());
   const requestSequence = useRef(0);
   const latestSuccessSequence = useRef(0);
   const activeController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!lockSession.ready) sendQueue.current.suspend();
+  }, [lockSession.ready, lockSession.epoch]);
 
   function setComposerBlocked(blocked: boolean): void {
     sendBlockedRef.current = blocked;
@@ -115,6 +127,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   }
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       const requestId = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId });
@@ -133,9 +146,10 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
       if (activeController.current === session.controller) activeController.current = null;
       session.stop();
     };
-  }, [paneId]);
+  }, [paneId, lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const controller = new AbortController();
     void fetchLaunchers(controller.signal).then((response) => {
       if (!controller.signal.aborted) {
@@ -161,7 +175,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
       controller.abort();
       session.stop();
     };
-  }, []);
+  }, [lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
     saveConversationTasks(taskStorageKey, tasks);
@@ -199,6 +213,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   }
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       const pollVersion = requestPollState.current!.begin();
       try {
@@ -226,7 +241,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
       }
     }, 2000);
     return () => session.stop();
-  }, [paneId]);
+  }, [paneId, lockSession.ready, lockSession.epoch]);
 
   function keepSettledRequest(request: PendingRequest): void {
     requestPollState.current!.settle(request.id);
@@ -359,7 +374,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
       <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-4">
         <header className="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-800 bg-[#1a1a1a]/95 px-4 py-3 backdrop-blur">
           <Link to="/" className="inline-block min-h-11 py-2 text-sm text-green-300 hover:text-green-200">Back to Homelings</Link>
-          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={`Details for ${persona.name}`}><PersonaAvatar avatar={persona.avatar} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">Details</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
+          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={`Details for ${persona.name}`}><PersonaAvatar avatar={persona.avatar} size="conversation" persona={persona} stale={personaStale || !snapshotHealthy || snapshot?.agents.find((agent) => agent.paneId === paneId)?.status !== "working"} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">Details</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
           <p className="text-xs text-neutral-400" role="status">
             {error ?? (history.available === false ? "history unavailable" : "history polling · 2s")}
           </p>
@@ -510,7 +525,7 @@ export function ConversationPage(): ReactElement {
     }
     return <>
       {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
-      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} />
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} personaStale={personaLookupError !== null} />
     </>;
   }
 

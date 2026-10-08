@@ -29,6 +29,10 @@ export interface DaemonConfig {
   readonly registryPath: string;
   /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
   readonly herdrSocketPath: string;
+  /** Owner-only local unlock state, never inside Collie or the repository. */
+  readonly unlockDataDir?: string;
+  /** Explicit localhost-only HTTP development mode; never inferred from proxy headers. */
+  readonly sessionDevHttp?: boolean;
 }
 
 const DEFAULT_PORT = 8790;
@@ -83,6 +87,8 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     allowAnyHost,
     bridgeOrigin,
     registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
+    unlockDataDir: env.HOMELING_DATA_DIR ?? process.env.HOMELING_DATA_DIR ?? join(homedir(), "Library", "Application Support", "Homeling"),
+    sessionDevHttp: (env.HOMELING_SESSION_DEV_HTTP ?? process.env.HOMELING_SESSION_DEV_HTTP) === "1",
     herdrSocketPath: env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock"),
   };
 }
