@@ -118,8 +118,6 @@ describe("pending request extraction", () => {
     expect(detectPendingRequest(focusedPreview)).toBeNull();
     expect(detectPendingRequest(focusedAskInput)).toBeNull();
     expect(detectPendingRequest(focusedMultiInput)).toBeNull();
-    expect(detectPendingRequest(focusedAskInput)).toBeNull();
-    expect(detectPendingRequest(focusedMultiInput)).toBeNull();
     expect(webFetchRequest?.kind).toBe("prompt-select");
     const webFetchLastOption = webFetchRequest?.options[webFetchRequest.options.length - 1]?.label;
     expect(webFetchLastOption).toMatch(/^No,/);
