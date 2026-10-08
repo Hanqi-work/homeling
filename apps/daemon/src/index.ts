@@ -6,7 +6,7 @@
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import type { PaneWire } from '@homeling/contracts';
 import { dirname, join } from "node:path";
-import { ActivityLedger } from "./activity-ledger.ts";
+import { ActivityLedger, TaskOccurrenceUnavailable } from "./activity-ledger.ts";
 import { createActivityObserver } from "./activity-observer.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText, sendControlKey } from "./control-key.ts";
@@ -183,6 +183,42 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
+  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop)$/);
+  if (taskAction) {
+    if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
+    const action = taskAction[2]!;
+    const method = action === "history" || action === "screen" ? "GET" : "POST";
+    if (req.method !== method) return Response.json({ error: "method not allowed" }, { status: 405, headers: { allow: method } });
+    if (method === "POST" && !jsonRequired(req)) return Response.json({ error: "application/json required" }, { status: 415 });
+    const stale = () => Response.json({ ok: false, error: "Recorded task cannot be bound to this live pane", code: "task.occurrence_unavailable", executed: false, textDelivered: false, deliveryUnknown: false }, { status: 409, headers: { "cache-control": "no-store" } });
+    try {
+      const key = decodeURIComponent(taskAction[1]!);
+      const occurrence = await runtime.activity.assertCurrent(key);
+      const target = new URL(req.url);
+      target.pathname = `/lite/api/pane/${encodeURIComponent(occurrence.paneId)}${action === "screen" ? "" : `/${action}`}`;
+      if (action !== "history") target.search = "";
+      const forwarded = new Request(target, req);
+      let refused: unknown;
+      const guardedFetch: BridgeFetch = (input, init) => {
+        if (init?.method === "GET" || init?.method === "HEAD" || !init?.method) return upstreamFetch(input, init);
+        return runtime.activity!.dispatchCurrent(key, admission!, (bound) => {
+          if (bound.paneId !== occurrence.paneId) throw new TaskOccurrenceUnavailable();
+          return upstreamFetch(input, init);
+        }).catch((error) => { refused = error; throw error; });
+      };
+      const response = await proxyBridgeRequest(forwarded, cfg, guardedFetch);
+      if (refused instanceof SessionLocked) return sessionRefusal();
+      if (refused instanceof TaskOccurrenceUnavailable) return stale();
+      if (method === "POST") return response;
+      const body = await response.arrayBuffer();
+      await runtime.activity.assertCurrent(key);
+      return new Response(body, { status: response.status, headers: response.headers });
+    } catch (error) {
+      if (error instanceof SessionLocked) return sessionRefusal();
+      if (error instanceof TaskOccurrenceUnavailable) return stale();
+      return Response.json({ error: error instanceof Error ? error.message : "Task unavailable", code: "task.unavailable" }, { status: 502 });
+    }
+  }
   const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
   const occurrenceMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)$/);
   if (activityMatch || occurrenceMatch) {
@@ -196,11 +232,9 @@ export async function handleRequest(
         return Response.json(activity, { headers: { "cache-control": "no-store" } });
       }
       const key = decodeURIComponent(occurrenceMatch![1]!);
-      const activity = await runtime.activity.list();
-      const occurrence = activity.occurrences.find((item) => item.occurrenceKey === key);
-      if (!occurrence) return Response.json({ error: "task occurrence not found" }, { status: 404 });
-      const current = (await runtime.activity.ownership(occurrence.paneId))?.occurrenceKey === key;
-      return Response.json({ occurrence, current }, { headers: { "cache-control": "no-store" } });
+      const task = await runtime.activity.task(key);
+      if (!task) return Response.json({ error: "task occurrence not found" }, { status: 404 });
+      return Response.json(task, { headers: { "cache-control": "no-store" } });
     } catch (error) {
       return Response.json({ error: error instanceof Error ? error.message : "Activity unavailable" }, { status: 502 });
     }
@@ -262,6 +296,21 @@ export async function handleRequest(
   if (req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/control-key$/.test(pathname)) {
     return sendControlKey(req, cfg, fetcher, store);
   }
+  const taskRequestsMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/requests$/);
+  if (taskRequestsMatch) {
+    if (req.method !== 'GET') return Response.json({ error: 'method not allowed' }, { status: 405 });
+    if (!runtime.activity) return Response.json({ error: 'Activity unavailable' }, { status: 503 });
+    let key: string;
+    try { key = decodeURIComponent(taskRequestsMatch[1]!); } catch { return Response.json({ error: 'invalid task occurrence' }, { status: 400 }); }
+    try {
+      const task = await runtime.activity.assertCurrent(key);
+      const requests = await collectPendingRequests(cfg, fetcher, store, req.headers.get('tailscale-user-login'), Date.now(), pane => resolvePendingOwnership(runtime, pane));
+      await runtime.activity.assertCurrent(key);
+      return Response.json(requests.filter(item => item.paneId === task.paneId && item.taskOccurrenceKey === key), { headers: { 'cache-control': 'no-store' } });
+    } catch (error) {
+      return Response.json({ error: 'Task occurrence is unavailable; inspect recorded activity', executed: false }, { status: error instanceof TaskOccurrenceUnavailable ? 409 : 502, headers: { 'cache-control': 'no-store' } });
+    }
+  }
   if (pathname === API_REQUESTS_PATH && req.method === "GET") {
     try {
       return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login"), Date.now(), pane => resolvePendingOwnership(runtime, pane)));
@@ -278,9 +327,9 @@ export async function handleRequest(
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
-    let body: { optionId?: unknown };
+    let body: { optionId?: unknown; occurrenceKey?: unknown };
     try {
-      body = await req.json() as { optionId?: unknown };
+      body = await req.json() as { optionId?: unknown; occurrenceKey?: unknown };
     } catch {
       return Response.json({ error: "bad body" }, { status: 400 });
     }
@@ -293,9 +342,39 @@ export async function handleRequest(
     } catch {
       return Response.json({ error: "invalid request id" }, { status: 400 });
     }
+    const record = store.find(id)?.request;
+    if (body.occurrenceKey !== undefined && (typeof body.occurrenceKey !== 'string' || body.occurrenceKey !== record?.taskOccurrenceKey)) {
+      return Response.json({ status: 'expired', outcome: 'stale', executed: false }, { status: 409 });
+    }
+    const taskKey = record?.taskOccurrenceKey;
+    if (taskKey) {
+      try {
+        if (!runtime.activity || (await runtime.activity.assertCurrent(taskKey)).paneId !== record?.paneId) throw new TaskOccurrenceUnavailable();
+      } catch { return Response.json({ status: 'expired', outcome: 'stale', executed: false }, { status: 409 }); }
+    }
+    let lockRejected = false;
+    const approvalFetch: BridgeFetch = async (target, init) => {
+      if ((init?.method ?? 'GET') === 'GET') return fetcher(target, init);
+      try {
+        if (!taskKey) return await fetcher(target, init);
+        return await runtime.activity!.dispatchCurrent(taskKey, admission!, task => {
+          const targetUrl = new URL(String(target));
+          if (task.paneId !== record?.paneId || targetUrl.pathname !== `/api/pane/${encodeURIComponent(task.paneId)}/keys` || controlKeyBlocksText(cfg, task.paneId)) throw new TaskOccurrenceUnavailable();
+          return upstreamFetch(target, init);
+        });
+      } catch (error) {
+        if (error instanceof SessionLocked) {
+          lockRejected = true;
+          return Response.json({ ok: false, code: 'prompt.read_failed' }, { status: 423 });
+        }
+        if (error instanceof TaskOccurrenceUnavailable) return Response.json({ ok: false, code: 'prompt_changed' }, { status: 409 });
+        throw error;
+      }
+    };
     const outcome = await approvePendingRequest(
-      cfg, fetcher, store, id, body.optionId, Date.now(), req.headers.get("tailscale-user-login"),
+      cfg, approvalFetch, store, id, body.optionId, Date.now(), req.headers.get("tailscale-user-login"),
     );
+    if (lockRejected) return sessionRefusal();
     return Response.json(outcome, { status: outcome.status === "expired" ? 409 : 200 });
   }
 

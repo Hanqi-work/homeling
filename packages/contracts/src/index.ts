@@ -24,7 +24,7 @@ export type {
 export { transitionRequest, upsertPendingRequest } from "./requests.ts";
 export { transcriptToMessages, mergeTranscripts } from "./transcript.ts";
 
-export type { ActivityKind, ActivityEvent, ActivityResponse, TaskOccurrence } from "./activity.ts";
+export type { ActivityKind, ActivityEvent, ActivityResponse, ActivityTaskResponse, TaskOccurrence } from "./activity.ts";
 export type { PushPayload, PushPreferences, PushBodyTemplate } from './push.ts';
 
 export type { CreateResponse, Launcher, LaunchersResponse, Task, TaskStatus } from "./tasks.ts";

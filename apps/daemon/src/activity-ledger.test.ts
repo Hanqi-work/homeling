@@ -115,6 +115,26 @@ test("observer capabilities cannot enroll user tasks or report user launch failu
   await expect(ledger.observe("pane_exited", { pane_id: "p", workspace_id: "s" }, wrongScope as unknown as typeof observer)).rejects.toThrow("activity.observe");
 });
 
+test("invalid registration cannot commit a ledger its own read seam rejects", async () => {
+  const { ledger, admission } = await fixture();
+  await expect(ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "" }, admission)).rejects.toThrow("Invalid activity ledger");
+  expect((await ledger.list()).events).toEqual([]);
+});
+
+test("each real observation gap remains recorded even when the latest task already completed", async () => {
+  const { ledger, observer, admission } = await fixture();
+  await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, admission);
+  await ledger.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "working" }, observer);
+  await ledger.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "done" }, observer);
+  await ledger.gap("first disconnect", observer);
+  ledger.live(observer);
+  await ledger.gap("second disconnect", observer);
+  const events = (await ledger.list()).events;
+  expect(events.filter((e) => e.kind === "observation.gap").map((e) => e.detail)).toEqual(["first disconnect", "second disconnect"]);
+  expect(new Set(events.map((e) => e.dedupeKey)).size).toBe(events.length);
+  expect((await ledger.ownership("p"))?.status).toBe("completed");
+});
+
 test("task creation commits durable persona ownership before live subscribers are notified", async () => {
   const { ledger, path, admission } = await fixture();
   const delivered: string[] = [];
