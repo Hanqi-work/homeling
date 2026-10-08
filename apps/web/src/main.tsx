@@ -2,6 +2,7 @@ import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router";
 import { App } from "./App.tsx";
+import { PushSettings } from './PushSettings.tsx';
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 
 const ConversationPage = lazy(() => import("./ConversationPage.tsx").then((module) => ({ default: module.ConversationPage })));
@@ -22,12 +23,11 @@ createRoot(root).render(
   <StrictMode>
     <BrowserRouter basename="/lite">
       <Routes>
-        <Route path="/" element={<App />} />
         <Route path="/p/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
         <Route path="/persona/:personaId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
         <Route path="/persona/:personaId/p/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
         <Route path="/t/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading task…</main>}><TaskDetailPage /></Suspense>} />
-        <Route path="*" element={<App />} />
+        <Route path="*" element={<App slots={{ settings: <PushSettings /> }} />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

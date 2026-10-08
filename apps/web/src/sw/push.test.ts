@@ -13,6 +13,6 @@ test('actual lite worker shows specific summary and clicks only same-origin lite
   expect(shown).toEqual([{ title: 'Work', options: { body: '需要你批准 mkfifo fixture-fifo', tag: 'request-1', icon: '/lite/icons/icon-192.png', badge: '/lite/icons/icon-192.png', data: { url: 'https://home.example/lite/persona/p1' } } }]);
   handlers.get('notificationclick')?.({ notification: { close() {}, data: { url: 'https://evil.example/phish' } }, waitUntil });
   await work; expect(opened).toEqual(['https://home.example/lite/']);
-  handlers.get('notificationclick')?.({ notification: { close() {}, data: { url: '/lite/task/task-1' } }, waitUntil });
-  await work; expect(opened[1]).toBe('https://home.example/lite/task/task-1');
+  handlers.get('notificationclick')?.({ notification: { close() {}, data: { url: '/lite/t/task-1' } }, waitUntil });
+  await work; expect(opened[1]).toBe('https://home.example/lite/t/task-1');
 });

@@ -15,11 +15,18 @@ test('pending occurrence survives daemon restart, gap cannot settle, explicit re
     const first = await make().observe(observation);
     const afterRestart = await make().observe(observation);
     expect(afterRestart?.payload?.occurrenceKey).toBe(first?.payload?.occurrenceKey);
-    expect(first?.payload?.url).toBe('/lite/t/task-1');
+    expect(first?.payload?.url).toBe('/lite/t/task-1?occurrence=instance-1');
     await make().observe({ ...observation, state: 'unknown' });
     expect((await make().observe(observation))?.payload?.occurrenceKey).toBe(first?.payload?.occurrenceKey);
     expect((await make().observe({ ...observation, binding: 'task:instance-2' }))?.payload?.occurrenceKey).not.toBe(first?.payload?.occurrenceKey);
     await make().observe({ ...observation, state: 'resolved' });
     expect((await make().observe(observation))?.payload?.occurrenceKey).not.toBe(first?.payload?.occurrenceKey);
+    const main = { ...observation, task: false, binding: 'main:real-persona:w1:old-main', paneId: 'old-main' };
+    const oldMain = await make().observe(main);
+    const retired = await make().retainBindings(new Set(['main:real-persona:w1:new-main']));
+    expect(retired.some(event => event.tag === oldMain?.tag)).toBe(true);
+    const newMain = await make().observe({ ...main, binding: 'main:real-persona:w1:new-main', paneId: 'new-main' });
+    expect(newMain?.payload?.occurrenceKey).not.toBe(oldMain?.payload?.occurrenceKey);
+    expect(newMain?.payload?.url).toBe('/lite/persona/real-persona');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

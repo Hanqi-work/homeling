@@ -14,7 +14,7 @@ export async function handlePushRequest(req: Request, runtime: PushApiRuntime, o
   }
   if (req.method !== 'POST' || !['subscribe', 'unsubscribe', 'preferences', 'test-send'].some(action => path === `/lite/api/push/${action}`)) return Response.json({ error: 'method or route not allowed' }, { status: 405, headers: noStore });
   try {
-    if (!admission) return lockedResponse();
+    if (!admission || 'scope' in admission) return lockedResponse();
     admission.assert();
     if (req.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') return Response.json({ error: 'application/json required' }, { status: 415 });
     const text = await req.text();

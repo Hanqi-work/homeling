@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PushPayload, PushRetractPayload } from '../../../packages/contracts/src/push.ts';
 import type { PushPersistence, StoredPushSubscription } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
-import type { MutationAdmission } from './session-lock.ts';
+import { SessionLocked, type MutationAdmission } from './session-lock.ts';
 
 export type PushSendResult = { readonly status: 'sent' | 'invalid' | 'failed'; readonly statusCode?: number };
 export interface PushTransport { send(subscription: StoredPushSubscription, payload: PushPayload | PushRetractPayload): Promise<PushSendResult> }
@@ -16,6 +16,7 @@ export function createPushOutput(options: {
   admission: SystemAdmission<'push.deliver'>;
   cleanupAdmission: SystemAdmission<'push.cleanup'>;
 }): PushOutput {
+  if (options.admission.scope !== 'push.deliver' || options.cleanupAdmission.scope !== 'push.cleanup') throw new Error('push output requires exact daemon capabilities');
   const cancelled = new Set<string>();
   let tail: Promise<unknown> = Promise.resolve();
   const removeInvalid = async (endpoint: string) => {
@@ -56,6 +57,7 @@ export function createPushOutput(options: {
 }
 /** User test sends retain their original admission; never route through system output. */
 export async function sendPushTest(store: PushPersistence, transport: PushTransport, endpoint: string, owner: string, admission: MutationAdmission): Promise<PushSendResult> {
+  if ('scope' in admission) throw new SessionLocked();
   admission.assert();
   const subscription = (await store.load()).subscriptions.find(s => s.endpoint === endpoint && s.owner === owner);
   if (!subscription) throw new Error('subscription not found');

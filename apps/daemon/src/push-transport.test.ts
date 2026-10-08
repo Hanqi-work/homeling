@@ -16,7 +16,7 @@ test('daemon generates independent VAPID once, reloads it, sends via injectable 
     let options: unknown;
     const transport = createWebPushTransport(keys, 'mailto:test@example.com', async (subscription, payload, opts) => {
       options = opts;
-      const request = webpush.generateRequestDetails(subscription, payload, opts);
+      const request = webpush.generateRequestDetails(subscription, payload ?? undefined, opts);
       expect(request.headers['Content-Encoding']).toBe('aes128gcm');
       expect(request.headers.Authorization).toContain(`k=${keys.publicKey}`);
       expect(request.body?.toString()).not.toContain('具体问题');

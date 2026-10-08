@@ -16,7 +16,9 @@ export interface PendingPushObservation {
 }
 export interface PendingPushEvent { readonly state: 'pending' | 'resolved'; readonly tag: string; readonly payload?: PushPayload; readonly supersededTag?: string }
 export class PendingPushLedger {
-  constructor(private readonly store: PushPersistence, private readonly admission: SystemAdmission<'push.deliver'>) {}
+  constructor(private readonly store: PushPersistence, private readonly admission: SystemAdmission<'push.deliver'>) {
+    if (admission.scope !== 'push.deliver') throw new Error('pending push requires delivery capability');
+  }
   /** Only durable registry/ownership replacement or deletion, never snapshot absence, retires a binding. */
   async retainBindings(valid: ReadonlySet<string>): Promise<readonly PendingPushEvent[]> {
     return this.store.mutate(state => {
@@ -43,7 +45,7 @@ export class PendingPushLedger {
       const identity = createHash('sha256').update(observation.identity).digest('hex');
       const occurrenceKey = current?.active && current.identity === identity ? current.occurrenceKey : randomUUID();
       const tag = `homeling-request-${occurrenceKey}`;
-      const payload: PushPayload = { version: 1, type: 'notification', title: observation.personaName.slice(0, 120), body: observation.summary.slice(0, 500), tag, url: observation.task ? `/lite/t/${encodeURIComponent(observation.paneId)}` : `/lite/persona/${encodeURIComponent(observation.personaId)}`, occurrenceKey: `request:${occurrenceKey}` };
+      const payload: PushPayload = { version: 1, type: 'notification', title: observation.personaName.slice(0, 120), body: observation.summary.slice(0, 500), tag, url: observation.task ? `/lite/t/${encodeURIComponent(observation.paneId)}?occurrence=${encodeURIComponent(observation.binding.slice('task:'.length))}` : `/lite/persona/${encodeURIComponent(observation.personaId)}`, occurrenceKey: `request:${occurrenceKey}` };
       return { next: current?.active && current.identity === identity ? state : { ...state, pendingOccurrences: { ...state.pendingOccurrences, [key]: { binding: observation.binding, identity, occurrenceKey, active: true } } }, result: { state: 'pending' as const, tag, payload, ...(current?.active && current.identity !== identity ? { supersededTag: `homeling-request-${current.occurrenceKey}` } : {}) } };
     }, this.admission);
   }
