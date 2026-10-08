@@ -27,6 +27,8 @@ export interface DaemonConfig {
   readonly bridgeOrigin: string;
   /** Persistent daemon-owned persona registry. */
   readonly registryPath: string;
+  /** Dedicated owner-only Markdown storage; injected fixtures may supply their own store. */
+  readonly memoryPath?: string;
   /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
   readonly herdrSocketPath: string;
 }
@@ -83,6 +85,7 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     allowAnyHost,
     bridgeOrigin,
     registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
+    memoryPath: env.HOMELING_MEMORY_DIR ?? process.env.HOMELING_MEMORY_DIR ?? join(env.HOMELING_DATA_DIR ?? process.env.HOMELING_DATA_DIR ?? join(homedir(), "Library", "Application Support", "Homeling"), "memory"),
     herdrSocketPath: env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock"),
   };
 }

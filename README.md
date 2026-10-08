@@ -75,6 +75,7 @@ curl -fsS http://127.0.0.1:8790/lite/api/health
 | `HOMELING_WEB_DIST` | 本仓库 `apps/web/dist` | 否，仅 daemon 环境支持 |
 | `HOMELING_BRIDGE_ORIGIN` | `http://127.0.0.1:8787`，仅支持 loopback HTTP origin | 否，仅 daemon 环境支持 |
 | `HOMELING_ALLOW_ANY_HOST` | 关闭；不要在部署时打开 | 否 |
+| `HOMELING_MEMORY_DIR` | `~/Library/Application Support/Homeling/memory`（或 `HOMELING_DATA_DIR/memory`），persona Markdown 与冻结会话文件；须为绝对路径、无 symlink、owner-only | 否，仅 daemon 环境支持 |
 
 推荐保持默认端口/产物/bridge 地址。非默认 `WEB_DIST` / `BRIDGE_ORIGIN` 需自行在 plist 中明确配置并重新加载，单纯 export 后运行安装脚本不生效。不要关闭 Host 检查来解决 403。
 
@@ -106,6 +107,15 @@ daemon 启动可能需要片刻，若立即检查失败，先查 launchd / 日�
 手机走一轮“派活 → 审批 → 收结果”；确认发送正文进入 history 后才显示“已送达”（HTTP 2xx 不等于 agent 已消费）。中断按钮仅请求 Ctrl+C，不关闭 pane，不保证进程已终止，后续状态才是依据；launch 超时也不证明上游已回滚，残留需查看原始 pane / 旧 UI 排查。
 
 PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`。当前更新检测仅写 console，并提供调试入口 `window.__homelingApplyUpdate()`，**没有用户可见的更新提示或刷新按钮**。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作、锁屏 push 或 idle-lock 已完成。
+
+## Persona 记忆（#12）
+
+- 每个 persona 持久化 `facts.md`、`preferences.md`、`project.md`；纯 UTF-8 Markdown，单文件最多 24,000 字节。编辑器显式保存，使用 revision 防止不同页面互相覆盖；冲突须手动重新加载，锁拒绝保留草稿，不会解锁后自动重放。保存结果未知时先重新加载核对。
+- **只在下一次会话启动 / 首条消息时生效**。当前运行 pane 不会热吸收编辑内容；daemon 重启但仍使用同一个 pane 也不是新会话。不要为了生效直接结束正在执行的任务。
+- 支持明确的全新交互式 `pi` launcher（可含 `--model`、`--provider` 的简单参数）；daemon 在 Homeling 数据目录生成冻结的 `session-*.md`，追加官方 `--append-system-prompt '<绝对文件路径>'`。不改 pi 配置、项目 AGENTS 文件或 Collie 文件。launcher 必须先在既有 allowlist 中配置；Homeling 只扩展已选行的记忆启动参数，不接受任意新命令。
+- 其余 kind、复杂 shell wrapper 或 resume launcher 明示 **unsupported native injection**，将冻结记忆作为首条用户消息前缀降级；不是等价的 system prompt。精确注入全文仍用于 history 送达对账，不以 HTTP 成功宣称 agent 已消费。
+- 原始文档与冻结文件可能含个人信息，请勿放入仓库或日志；目录 0700、文件 0600。文件损坏/非法 UTF-8/symlink/过宽权限拒绝读写，不静默替换为空。遗留 `.write-lock` 不自动抢占；确认 daemon 全部停止且没有在途写操作后由本机操作者处理。冻结文件保留供仍运行的 pi 使用，只有确认对应会话退出后才可人工清理。
+- **人工遗留**：手机进入 persona 的 Memory，编辑并保存；在已配置的真实 pi 新会话询问记忆中的事实，确认可引用；再修改并证明旧 pane 不变、新会话读取新内容；其他 kind 检查降级提示。自动测试仅用 fake Herdr/bridge 和临时文件，未运行真实 pi、未操作 Collie/秘密/服务。
 
 ## 更新与卸载
 
