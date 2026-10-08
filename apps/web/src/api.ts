@@ -55,6 +55,22 @@ export async function createPersona(input: { name: string; avatar: { color: stri
   return result.persona;
 }
 
+export interface PersonaDeleteResult {
+  readonly deleted: boolean;
+  readonly archived: boolean;
+}
+
+export async function deletePersona(personaId: string): Promise<PersonaDeleteResult> {
+  const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+    method: "DELETE", headers: { accept: "application/json", "content-type": "application/json" }, body: "{}",
+  });
+  const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string }) | null;
+  if (!response.ok || typeof result?.deleted !== "boolean" || typeof result.archived !== "boolean") {
+    throw new Error(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`);
+  }
+  return { deleted: result.deleted, archived: result.archived };
+}
+
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
   const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
     method: "POST",

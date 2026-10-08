@@ -15,6 +15,7 @@ import { historyReducer, initialHistoryState, optimisticEntries, reconcileOutgoi
 import { startAbortableSerialPolling } from "./polling.ts";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { TaskChip } from "./TaskChip.tsx";
+import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
@@ -23,6 +24,7 @@ type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 interface PaneConversationProps {
   paneId: string;
   personaId?: string;
+  persona?: PersonaView;
 }
 
 function failureLabel(message: OutgoingMessage): string {
@@ -31,7 +33,7 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId, persona }: PaneConversationProps): ReactElement {
   const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
@@ -343,8 +345,8 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
     <AssistantRuntimeProvider runtime={runtime}>
       <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-4">
         <header className="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-800 bg-[#1a1a1a]/95 px-4 py-3 backdrop-blur">
-          <Link to="/" className="text-sm text-green-300 hover:text-green-200">← panes</Link>
-          <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>
+          <Link to="/" className="inline-block min-h-11 py-2 text-sm text-green-300 hover:text-green-200">Back to Homelings</Link>
+          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={`Details for ${persona.name}`}><PersonaAvatar avatar={persona.avatar} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">Details</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
           <p className="text-xs text-neutral-400" role="status">
             {error ?? (history.available === false ? "history unavailable" : "history polling · 2s")}
           </p>
@@ -489,7 +491,7 @@ export function ConversationPage(): ReactElement {
     }
     return <>
       {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
-      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} />
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} />
     </>;
   }
 
