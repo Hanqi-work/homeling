@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PushPayload } from '@homeling/contracts';
-import type { PushPersistence, StoredPushSubscription } from './push-store.ts';
+import { withRetractTags, type PushPersistence, type StoredPushSubscription } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 import { SessionLocked, type MutationAdmission } from './session-lock.ts';
 
@@ -51,6 +51,7 @@ export function createPushOutput(options: {
     },
     async retract(tag) {
       cancelled.add(tag);
+      await options.store.mutate(state => ({ next: withRetractTags(state, [tag]), result: undefined }), options.admission);
       // Cancellation is guaranteed only before dispatch. No silent retract-only Web Push:
       // userVisibleOnly requires a visible notification; local SW messages can attempt closure.
     },

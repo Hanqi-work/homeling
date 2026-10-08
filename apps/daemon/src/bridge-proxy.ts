@@ -7,6 +7,7 @@
  * endpoint on loopback. The bridge's identity gate stays authoritative for direct callers; the
  * proxy hop is loopback-to-loopback.
  */
+import { SessionLocked } from "./session-lock.ts";
 import type { DaemonConfig } from "./config.ts";
 
 /** Browser-facing prefix (full path, as the daemon receives it from tailscale serve). */
@@ -206,6 +207,7 @@ export async function proxyBridgeRequest(
     }
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   } catch (error) {
+    if (error instanceof SessionLocked) throw error;
     if (isSttRoute) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       return Response.json({ ok: false, error: timedOut ? "Transcription timed out" : "Transcription unavailable" }, { status: timedOut ? 504 : 502 });

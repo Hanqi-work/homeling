@@ -44,7 +44,7 @@ describe("TaskDetailPage", () => {
   });
 
   test("partial send locks B until retry succeeds, then restores composer without marking delivery", async () => {
-    const queue = createTaskSendQueue();
+    const queue = createTaskSendQueue(() => () => {});
     const requests: string[] = [];
     let inputBuffer = "";
     let historyAvailable = false;

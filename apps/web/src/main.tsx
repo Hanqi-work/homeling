@@ -6,11 +6,12 @@ import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { PushSettings } from "./PushSettings.tsx";
+import { PushRetractions } from './PushRetractions.tsx';
 import { LocaleProvider } from "./locale.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
-const ActivityPanel = lazy(() => import("./ActivityPanel.tsx").then((module) => ({ default: module.ActivityPanel })));
+const ActivityPanel = lazy(() => import("./ActivityPanel.tsx").then(module => ({ default: module.ActivityPanel })));
 
 registerServiceWorker((handle) => {
   console.info("[homeling] new version available — call applyUpdate() to refresh");
@@ -21,6 +22,7 @@ if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <StrictMode>
     <LocaleProvider>
+      <PushRetractions />
       <BrowserRouter basename="/lite">
         <AppRoot slots={{
           homeSummary: <SessionAwareHomeTriage />,

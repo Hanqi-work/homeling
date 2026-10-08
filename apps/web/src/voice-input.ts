@@ -1,4 +1,5 @@
 import { transcribeAudio } from "./api.ts";
+import { ClientSessionLocked, sessionState } from "./session-state.ts";
 
 export interface AudioStream { getTracks(): { stop(): void }[] }
 export interface AudioRecorder {
@@ -11,6 +12,8 @@ export interface AudioRecorder {
   stop(): void;
 }
 export interface VoiceInputDependencies {
+  /** Explicit injectable admission for fake fixtures; the browser adapter defaults to sessionState. */
+  admit?: () => (() => void);
   getStream(): Promise<AudioStream>;
   createRecorder(stream: AudioStream): AudioRecorder;
   transcribe(audio: Blob, signal: AbortSignal): Promise<string>;
@@ -54,11 +57,13 @@ export class VoiceInput {
   private recorder: AudioRecorder | null = null;
   private controller: AbortController | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private checkAdmission: () => void = () => { throw new ClientSessionLocked(); };
 
   constructor(
     private readonly dependencies: VoiceInputDependencies,
     private readonly onState: (state: VoiceInputState) => void,
     private readonly onTranscript: (text: string) => void,
+    private readonly admit: () => (() => void) = dependencies.admit ?? sessionState.admit,
   ) {}
 
   private update(phase: VoiceInputState["phase"], message: string): void {
@@ -98,12 +103,14 @@ export class VoiceInput {
     const generation = ++this.generation;
     this.update("permission", "正在请求麦克风权限…");
     try {
+      this.checkAdmission = this.admit();
       const stream = await this.dependencies.getStream();
       if (generation !== this.generation) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       this.stream = stream;
+      this.checkAdmission();
       const recorder = this.dependencies.createRecorder(stream);
       this.recorder = recorder;
       const chunks: Blob[] = [];
@@ -153,8 +160,10 @@ export class VoiceInput {
     this.controller = new AbortController();
     try {
       if (!audio.size) throw new Error("录音为空，请重试。");
+      this.checkAdmission();
       const text = await this.dependencies.transcribe(audio, this.controller.signal);
       if (generation !== this.generation) return;
+      this.checkAdmission();
       if (!text.trim()) throw new Error("未识别到语音，请重试。");
       this.controller = null;
       this.update("idle", "转写已加入草稿，请编辑确认后发送。");

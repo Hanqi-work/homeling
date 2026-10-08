@@ -120,14 +120,14 @@ describe("handleRequest — routing", () => {
     };
     const launch = { path: "/lite/api/launch", method: "POST", contentType: "application/json", body };
     const accepted = await handleRequest(req({
-      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
       origin: `https://${TAILSCALE_HOST}`, ...launch,
     }), CFG, fetcher);
     expect(accepted.status).toBe(200);
     expect(forwarded).toEqual([{ url: `${CFG.bridgeOrigin}/api/launch`, body }]);
 
     const noOrigin = await handleRequest(req({
-      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
       ...launch,
     }), CFG, fetcher);
     expect(noOrigin.status).toBe(403);
@@ -150,14 +150,14 @@ describe("handleRequest — routing", () => {
       return Response.json({ ok: true });
     };
     const trusted = await handleRequest(req({
-      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
       origin: `https://${TAILSCALE_HOST}`, path: "/lite/api/pane/w1:p2/reply", method: "POST",
       contentType: "application/json", body,
     }), CFG, fetcher);
     expect(trusted.status).toBe(200);
     expect(forwarded).toEqual([{ url: `${CFG.bridgeOrigin}/api/pane/w1:p2/reply`, body, method: "POST" }]);
     const crossOrigin = await handleRequest(req({
-      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
       origin: "https://evil.example", path: "/lite/api/pane/w1:p2/reply", method: "POST",
       contentType: "application/json", body,
     }), CFG, fetcher);
@@ -223,7 +223,7 @@ describe("handleRequest — routing", () => {
 
   test("trusted identity can fetch /lite/ over the tailscale host", async () => {
     const res = await handleRequest(
-      req({ remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com", path: "/lite/" }),
+      req({ remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com", path: "/lite/" }),
       CFG,
     );
     expect(res.status).toBe(200);
