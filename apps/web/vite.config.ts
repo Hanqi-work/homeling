@@ -7,7 +7,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:8787",
+      "/lite/api": {
+        target: "http://127.0.0.1:8787",
+        rewrite: (path) => path.replace(/^\/lite/, ""),
+      },
     },
   },
 });

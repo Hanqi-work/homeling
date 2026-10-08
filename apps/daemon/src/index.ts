@@ -5,6 +5,7 @@
  */
 import { checkAccess, type AccessConfig } from "./access.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
+import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
 
 export const API_HEALTH_PATH = "/lite/api/health";
@@ -24,6 +25,7 @@ export function staticDirOf(c: DaemonConfig): StaticDir {
 export async function handleRequest(
   req: Request & { remoteAddress?: string | null },
   cfg: DaemonConfig,
+  fetcher: BridgeFetch = fetch,
 ): Promise<Response> {
   const denied = checkAccess(req, accessConfigOf(cfg));
   if (!denied.ok) {
@@ -37,6 +39,11 @@ export async function handleRequest(
 
   if (pathname === API_HEALTH_PATH || pathname === "/api/health") {
     return Response.json({ ok: true, service: "homeling-daemon" });
+  }
+
+  if (pathname.startsWith(BROWSER_API_PREFIX)) {
+    if (req.method !== "GET") return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
+    return proxyBridgeRequest(req, cfg, fetcher);
   }
 
   const staticRes = await serveStatic(req, staticDirOf(cfg));
