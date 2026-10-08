@@ -27,6 +27,11 @@ export async function initializePushRuntime(cfg: DaemonConfig, persona: PersonaR
     if (stopped || polling) return;
     polling = true;
     try {
+      const personas = await persona.registry.list();
+      const latestTasks = new Map((await persona.activity!.list()).occurrences.map(item => [item.paneId, item]));
+      const validBindings = new Set(personas.map(item => `main:${item.id}:${item.spaceId}:${item.mainPaneId}`));
+      for (const task of latestTasks.values()) if (personas.some(item => item.id === task.personaId && item.spaceId === task.spaceId)) validBindings.add(`task:${task.occurrenceKey}`);
+      await consumer.retainBindings(validBindings);
       const observations = await readPendingPushObservations(cfg, persona.fetcher, persona.registry, paneId => persona.activity!.ownership(paneId));
       if (!stopped) await consumer.observePending(observations);
     } catch { console.error('[homeling-daemon] push observation gap; retaining pending identities'); }

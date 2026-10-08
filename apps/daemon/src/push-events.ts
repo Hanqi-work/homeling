@@ -11,9 +11,13 @@ export class PushEventConsumer {
   constructor(private readonly options: { store: PushPersistence; activity: PushActivityInput; registry: { get(id: string): Promise<{ name: string } | undefined> }; output: PushOutput; admission: SystemAdmission<'push.deliver'> }) {
     this.pending = new PendingPushLedger(options.store, options.admission);
   }
+  async retainBindings(valid: ReadonlySet<string>): Promise<void> {
+    for (const event of await this.pending.retainBindings(valid)) await this.options.output.retract(event.tag);
+  }
   async observePending(observations: readonly PendingPushObservation[]): Promise<void> {
     for (const observation of observations) {
       const event = await this.pending.observe(observation);
+      if (event?.supersededTag) await this.options.output.retract(event.supersededTag);
       if (event?.state === 'resolved') await this.options.output.retract(event.tag);
       if (event?.payload) {
         // Don't block the next resolution observation on a slow push service.

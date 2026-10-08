@@ -1,5 +1,6 @@
 import webpush from 'web-push';
-import { mkdir, readFile, writeFile, lstat } from 'node:fs/promises';
+import { mkdir, open, writeFile, lstat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { createECDH, ECDH } from 'node:crypto';
 import type { PushTransport } from './push-output.ts';
@@ -7,12 +8,18 @@ import type { PushTransport } from './push-output.ts';
 export interface VapidKeys { readonly publicKey: string; readonly privateKey: string }
 export async function loadOrCreateVapid(path: string): Promise<VapidKeys> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = await lstat(dirname(path));
+  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || (directory.mode & 0o077) !== 0) throw new Error('unsafe VAPID directory');
   try {
     await writeFile(path, JSON.stringify(webpush.generateVAPIDKeys()), { flag: 'wx', mode: 0o600 });
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-  const stat = await lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) throw new Error('unsafe VAPID file');
-  const keys = JSON.parse(await readFile(path, 'utf8')) as VapidKeys;
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let keys: VapidKeys;
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 1024) throw new Error('unsafe VAPID file');
+    keys = JSON.parse(await file.readFile('utf8')) as VapidKeys;
+  } finally { await file.close(); }
   const ecdh = createECDH('prime256v1');
   ecdh.setPrivateKey(Buffer.from(keys.privateKey, 'base64url'));
   if (ecdh.getPublicKey().toString('base64url') !== keys.publicKey) throw new Error('invalid VAPID pair');
@@ -36,6 +43,7 @@ export function createWebPushTransport(keys: VapidKeys, subject: string, send: t
   if (!/^(mailto:[^\s]+@[^\s]+|https:\/\/[^\s]+)$/.test(subject)) throw new Error('HOMELING_PUSH_SUBJECT must be a mailto or HTTPS contact');
   return {
     async send(subscription, payload) {
+      if (!validatePushSubscription(subscription)) return { status: 'invalid' };
       try {
         await send(subscription, JSON.stringify(payload), { vapidDetails: { ...keys, subject }, contentEncoding: 'aes128gcm', TTL: 120, timeout: 10_000 });
         return { status: 'sent' };
