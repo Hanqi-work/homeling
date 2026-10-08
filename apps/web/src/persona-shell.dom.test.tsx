@@ -138,6 +138,21 @@ test("unknown deletion stays visible across empty-list polling and a later locke
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("previous deletion remains unconfirmed");
 });
 
+test("a later deleted false response cannot erase an earlier unknown deletion", async () => {
+  let writes = 0;
+  mockReads(async () => {
+    if (++writes === 1) throw new Error("connection lost");
+    return Response.json({ deleted: false, archived: false });
+  });
+  await mount("/persona/mira/details");
+  await click("Delete Mira"); await click("Confirm deletion");
+  await click("Confirm deletion");
+  const warning = container.querySelector('[role="alert"]')?.textContent;
+  expect(warning).toContain("This attempt did not confirm deletion");
+  expect(warning).toContain("previous deletion remains unconfirmed");
+  expect(warning).not.toContain("Persona was not deleted");
+});
+
 test("unknown delete A then direct B then A starts a fresh detail route generation", async () => {
   const sol = { ...persona, id: "sol", name: "Sol" };
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
