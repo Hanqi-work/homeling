@@ -8,6 +8,7 @@ interface ReplyComposerProps {
   onDraftChange: (value: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  disabledReason?: string;
   scopeId?: string;
   voiceDependencies?: VoiceInputDependencies;
 }
@@ -30,7 +31,7 @@ export function handleComposerKeyDown(
   submit();
 }
 
-export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, scopeId, voiceDependencies = browserVoiceInput }: ReplyComposerProps): ReactElement {
+export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, disabledReason, scopeId, voiceDependencies = browserVoiceInput }: ReplyComposerProps): ReactElement {
   const [voiceState, setVoiceState] = useState<VoiceInputState>({ phase: "idle", message: "" });
   const latest = useRef({ draft, onDraftChange, scopeId, disabled });
   latest.current = { draft, onDraftChange, scopeId, disabled };
@@ -117,7 +118,7 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
       </div>
       {voiceState.message ? <p className="mt-2 text-xs text-neutral-300" role={voiceState.phase === "error" ? "alert" : "status"}>{voiceState.message}</p> : null}
       {busy ? <button type="button" onClick={() => voice.cancel()} className="mt-1 min-h-11 px-3 text-sm text-neutral-300">取消语音输入</button> : null}
-      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">请先重试尚未确认的消息，再发送新消息。</p> : null}
+      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">{disabledReason ?? "请先重试尚未确认的消息，再发送新消息。"}</p> : null}
       <p className="mt-1 text-right text-[10px] text-neutral-500">Enter 发送 · Shift+Enter 换行</p>
     </form>
   );

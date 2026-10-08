@@ -7,6 +7,7 @@ export type {
   TabView,
   WorkspaceView,
 } from "./snapshot.ts";
+export { paneControlIdentity } from "./snapshot.ts";
 
 export type { ConversationRow, WorkspaceGroup } from "./messages.ts";
 export { paneToRow, snapshotToGroups } from "./messages.ts";

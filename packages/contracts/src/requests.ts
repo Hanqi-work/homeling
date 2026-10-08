@@ -22,8 +22,8 @@ interface PendingRequestBase {
   /** Stable identity of this observed request, not the pane identity. */
   readonly id: string;
   readonly paneId: string;
-  /** Persona that owns the pane; retained even when the consumer is not a conversation view. */
-  readonly personaId: string;
+  /** Real daemon registry identity. Absent for legacy Collie panes; never a workspace ID. */
+  readonly personaId?: string;
   readonly createdAt: string;
   readonly status: PendingRequestStatus;
 }

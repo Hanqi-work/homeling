@@ -41,12 +41,13 @@ describe("pending request daemon routes", () => {
     expect(forwardedLogins).toEqual(["me@github.com", "me@github.com"]);
     const requests = await response.json() as Array<Record<string, unknown>>;
     expect(requests[0]).toMatchObject({
-      paneId: "w1:p1", personaId: "w1", kind: "prompt-select", status: "pending",
+      paneId: "w1:p1", kind: "prompt-select", status: "pending",
       payload: { question: "Do you want to proceed?" },
     });
     const firstOption = (requests[0]?.payload as { options: Array<Record<string, unknown>> }).options[0]!;
     expect(firstOption).toMatchObject({ id: "1", label: "Yes" });
     expect(firstOption).not.toHaveProperty("keys");
+    expect(requests[0]).not.toHaveProperty("personaId"); // Legacy space is not a registered persona.
   });
 
   test("approval rejects cross-origin and non-JSON calls before bridge writes", async () => {
