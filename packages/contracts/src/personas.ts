@@ -1,3 +1,12 @@
+export interface PersonaMemorySession {
+  readonly paneId: string;
+  readonly strategy: "pi-append-system-prompt" | "first-message-prefix";
+  readonly unsupported: boolean;
+  readonly notice: string;
+  /** Frozen launch context for unsupported kinds; never recomputed after edits. */
+  readonly prefix: string;
+}
+
 export interface PersonaAvatar {
   readonly color: string;
   readonly character?: string;
@@ -15,6 +24,9 @@ export interface PersonaRecord {
   readonly createdAt: string;
   readonly launcherCommand?: string;
   readonly systemPromptInjected?: boolean;
+  readonly memorySession?: PersonaMemorySession;
+  /** A dispatched injection with uncertain outcome is never automatically replayed. */
+  readonly memoryDeliveryUnknown?: boolean;
   readonly paused?: boolean;
   readonly needsAttention?: string;
 }

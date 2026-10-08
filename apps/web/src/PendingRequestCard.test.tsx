@@ -21,7 +21,7 @@ describe("PendingRequestCard", () => {
     expect(html).toContain("rm -rf build");
     expect(html).toContain("Allow");
     expect(html).toContain("Deny");
-    expect(html).toContain("等待处理");
+    expect(html).toContain("Awaiting action");
     expect(html).not.toContain("disabled=\"\"");
   });
 
@@ -33,9 +33,9 @@ describe("PendingRequestCard", () => {
       status: "expired",
     };
     const html = renderToStaticMarkup(<PendingRequestCard request={request} onApprove={async () => ({ status: "expired", outcome: "stale" })} />);
-    expect(html).toContain("预览选择");
+    expect(html).toContain("Preview selection");
     expect(html).toContain("│ UI│");
-    expect(html).toContain("已处理（请求已过期）");
+    expect(html).toContain("Handled (request expired)");
     expect(html).toContain("disabled=\"\"");
   });
 
