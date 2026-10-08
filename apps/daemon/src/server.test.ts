@@ -22,14 +22,21 @@ function req(opts: {
   remoteAddress?: string;
   host?: string;
   login?: string;
+  origin?: string;
   path?: string;
   method?: string;
+  contentType?: string;
+  body?: string;
 }): Request & { remoteAddress?: string | null } {
   const headers = new Headers();
   if (opts.host !== undefined) headers.set("host", opts.host);
   if (opts.login !== undefined) headers.set("tailscale-user-login", opts.login);
+  if (opts.origin !== undefined) headers.set("origin", opts.origin);
+  if (opts.contentType !== undefined) headers.set("content-type", opts.contentType);
   return Object.assign(
-    new Request(`https://placeholder${opts.path ?? "/lite/"}`, { method: opts.method ?? "GET", headers }),
+    new Request(`https://placeholder${opts.path ?? "/lite/"}`, {
+      method: opts.method ?? "GET", headers, body: opts.body,
+    }),
     { remoteAddress: opts.remoteAddress },
   );
 }
@@ -70,7 +77,7 @@ describe("handleRequest — routing", () => {
     expect(response.headers.get("etag")).toBe("\"history-1\"");
   });
 
-  test("proxy rejects writes and paths outside the narrow read allowlist", async () => {
+  test("proxy rejects writes and paths outside the narrow allowlist", async () => {
     let calls = 0;
     const fetcher: BridgeFetch = async () => { calls += 1; return Response.json({}); };
     const base = { remoteAddress: "127.0.0.1", host: "localhost:8790" };
@@ -79,6 +86,57 @@ describe("handleRequest — routing", () => {
     expect(write.status).toBe(405);
     expect(forbidden.status).toBe(404);
     expect(calls).toBe(0);
+  });
+
+  test("POST reply uses same-origin access checks before proxying", async () => {
+    const body = '{"text":"hello","submit":true}';
+    const forwarded: Array<{ url: string; body: string; method: string }> = [];
+    const fetcher: BridgeFetch = async (input, init) => {
+      forwarded.push({ url: String(input), body: await new Response(init?.body).text(), method: init?.method ?? "" });
+      return Response.json({ ok: true });
+    };
+    const trusted = await handleRequest(req({
+      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      origin: `https://${TAILSCALE_HOST}`, path: "/lite/api/pane/w1:p2/reply", method: "POST",
+      contentType: "application/json", body,
+    }), CFG, fetcher);
+    expect(trusted.status).toBe(200);
+    expect(forwarded).toEqual([{ url: `${CFG.bridgeOrigin}/api/pane/w1:p2/reply`, body, method: "POST" }]);
+    const crossOrigin = await handleRequest(req({
+      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      origin: "https://evil.example", path: "/lite/api/pane/w1:p2/reply", method: "POST",
+      contentType: "application/json", body,
+    }), CFG, fetcher);
+    expect(crossOrigin.status).toBe(403);
+    expect(forwarded).toHaveLength(1);
+  });
+
+  test("reply requires the tailnet Origin through a proxy, while direct loopback can omit it", async () => {
+    let calls = 0;
+    const fetcher: BridgeFetch = async () => { calls += 1; return Response.json({ ok: true }); };
+    const reply = { path: "/lite/api/pane/w1:p2/reply", method: "POST", contentType: "application/json", body: '{"text":"hi"}' };
+    const forwardedPeerNoOrigin = await handleRequest(req({
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com", ...reply,
+    }), CFG, fetcher);
+    expect(forwardedPeerNoOrigin.status).toBe(403);
+
+    const forwardedPeerWrongOrigin = await handleRequest(req({
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      origin: "https://localhost:8790", ...reply,
+    }), CFG, fetcher);
+    expect(forwardedPeerWrongOrigin.status).toBe(403);
+    for (const origin of [`http://${TAILSCALE_HOST}`, `https://${TAILSCALE_HOST}:444`]) {
+      const mismatchedOrigin = await handleRequest(req({
+        remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com", origin, ...reply,
+      }), CFG, fetcher);
+      expect(mismatchedOrigin.status).toBe(403);
+    }
+
+    const directLoopback = await handleRequest(req({
+      remoteAddress: "127.0.0.1", host: "localhost:8790", ...reply,
+    }), CFG, fetcher);
+    expect(directLoopback.status).toBe(200);
+    expect(calls).toBe(1);
   });
 
   test("GET /lite/ serves the SPA index", async () => {

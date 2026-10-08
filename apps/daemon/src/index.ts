@@ -3,7 +3,7 @@
  * web build output plus the /lite/api/* routes, all behind the self-held access gate
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
-import { checkAccess, type AccessConfig } from "./access.ts";
+import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
@@ -22,6 +22,18 @@ export function staticDirOf(c: DaemonConfig): StaticDir {
   return { root: c.webDist, indexHtml: c.indexHtml };
 }
 
+function hasTailscaleOrigin(req: Request, cfg: DaemonConfig): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.origin === new URL(`https://${cfg.tailscaleHost}`).origin &&
+      !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleRequest(
   req: Request & { remoteAddress?: string | null },
   cfg: DaemonConfig,
@@ -36,13 +48,25 @@ export async function handleRequest(
   }
 
   const { pathname } = new URL(req.url);
+  const isReplyPost = req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/reply$/.test(pathname);
+  if (isReplyPost && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
+    return new Response("cross-origin rejected\n", {
+      status: 403,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
 
   if (pathname === API_HEALTH_PATH || pathname === "/api/health") {
     return Response.json({ ok: true, service: "homeling-daemon" });
   }
 
   if (pathname.startsWith(BROWSER_API_PREFIX)) {
-    if (req.method !== "GET") return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
+    if (req.method === "POST" && !isReplyPost) {
+      return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
+    }
+    if (req.method !== "GET" && req.method !== "POST") {
+      return new Response("method not allowed\n", { status: 405, headers: { allow: "GET, POST" } });
+    }
     return proxyBridgeRequest(req, cfg, fetcher);
   }
 

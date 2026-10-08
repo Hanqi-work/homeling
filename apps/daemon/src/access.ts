@@ -29,11 +29,16 @@ export interface AccessConfig {
 
 export type AccessDecision = { ok: true } | { ok: false; reason: string };
 
-function isLoopbackAddress(remoteAddress: string | null): boolean {
+export function isLoopbackAddress(remoteAddress: string | null): boolean {
   if (!remoteAddress) return false;
   // Bun reports IPv6-mapped IPv4 as "::ffff:127.0.0.1" / "::ffff:127.0.0.1%lo0".
   const addr = remoteAddress.toLowerCase().replace(/^::ffff:/, "").split("%")[0]!;
   return addr === "::1" || addr === "[::1]" || addr.startsWith("127.");
+}
+
+/** Only a direct peer using a loopback Host is a local caller; Tailscale Serve itself is loopback. */
+export function isLoopbackRequest(req: Request & { remoteAddress?: string | null }): boolean {
+  return LOOPBACK_HOST.test(req.headers.get("host") ?? "") && isLoopbackAddress(req.remoteAddress ?? null);
 }
 
 /** Host-header allowlist: loopback forms always pass, otherwise only the configured tailscale host. */
@@ -76,17 +81,15 @@ export function checkAccess(
     const allowed =
       originHost === host ||
       originHost.replace(/:\d+$/, "") === host.replace(/:\d+$/, "") ||
-      LOOPBACK_HOST.test(originHost) ||
-      LOOPBACK_HOST.test(host);
+      LOOPBACK_HOST.test(originHost);
     if (!allowed) return { ok: false, reason: "cross-origin rejected" };
-  } else if (level === "write" && !LOOPBACK_HOST.test(host) && !isLoopbackAddress(req.remoteAddress ?? null)) {
-    // A write with no Origin header from a non-loopback caller isn't a real browser request.
+  } else if (level === "write" && !isLoopbackRequest(req)) {
+    // A write without Origin is allowed only for direct local callers, not a loopback proxy hop.
     return { ok: false, reason: "origin required" };
   }
 
-  // 3. Tailscale identity. Loopback is trusted by address — a header can never revoke that,
-  //    and a header can never substitute for it: no identity + non-loopback = refused.
-  if (isLoopbackAddress(req.remoteAddress ?? null)) return { ok: true };
+  // 3. Tailscale identity. Only a direct loopback caller using a loopback Host is trusted by address.
+  if (isLoopbackRequest(req)) return { ok: true };
 
   const login = req.headers.get("tailscale-user-login");
   if (!login) return { ok: false, reason: "identity required" };

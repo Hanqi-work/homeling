@@ -20,11 +20,14 @@ afterEach(() => {
 });
 
 describe("allowBridgePath — the narrow allowlist", () => {
-  test("snapshot and pane history pass", () => {
+  test("snapshot and pane history pass only as GET; reply passes only as POST", () => {
     expect(allowBridgePath("/api/snapshot")).toBe(true);
     expect(allowBridgePath("/api/pane/w5N:p1/history")).toBe(true);
     expect(allowBridgePath("/api/pane/w5N%3Ap1/history")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/history")).toBe(true);
+    expect(allowBridgePath("/api/pane/w1:p2/reply", "POST")).toBe(true);
+    expect(allowBridgePath("/api/pane/w1:p2/reply")).toBe(false);
+    expect(allowBridgePath("/api/pane/w1:p2/reply", "GET")).toBe(false);
   });
 
   test("everything a browser must not reach through the daemon is refused", () => {
@@ -70,6 +73,27 @@ describe("proxyTargetUrl", () => {
     expect(() => proxyTargetUrl("/lite/api/pane/p1/reply", cfg)).toThrow();
   });
 
+  test("POST reply refuses simple-form content types before contacting Collie", async () => {
+    let calls = 0;
+    const fetcher = async () => { calls += 1; return Response.json({ ok: true }); };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/p1/reply", {
+      method: "POST", headers: { "content-type": "text/plain" }, body: '{"text":"hi"}',
+    }), cfg, fetcher);
+    expect(response.status).toBe(415);
+    expect(calls).toBe(0);
+  });
+
+  test("reply route keeps the same encoded-path traversal protections", () => {
+    for (const payload of [
+      "/lite/api/pane/p1/%2e%2e/reply",
+      "/lite/api/pane/%252e%252e%5cconfig%23/reply",
+      "/lite/api/pane/p1%3Fother/reply",
+      "/lite/api/pane/p1%2F..%2Fconfig/reply",
+    ]) {
+      expect(() => proxyTargetUrl(payload, cfg, "POST")).toThrow();
+    }
+  });
+
   test("rejects encoded path delimiters before constructing the fetch URL", () => {
     const payloads = [
       "/lite/api/pane/p1/%2e%2e/history",
@@ -94,6 +118,28 @@ describe("proxyTargetUrl", () => {
       expect(response.status).toBe(404);
     }
     expect(calls).toBe(0);
+  });
+
+  test("POST reply forwards the exact validated URL and raw JSON body", async () => {
+    const body = '{"text":"hello\n世界","submit":true,"expected_prompt":"prompt"}';
+    let fetchUrl = "";
+    let fetchBody = "";
+    let fetchMethod = "";
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchUrl = String(input);
+      fetchBody = await new Response(init?.body).text();
+      fetchMethod = init?.method ?? "";
+      return Response.json({ ok: true });
+    };
+    const path = "/lite/api/pane/w1:p2/reply";
+    const validatedUrl = proxyTargetUrl(path, cfg, "POST");
+    const response = await proxyBridgeRequest(new Request(`http://daemon.test${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    }), cfg, fetcher);
+    expect(response.status).toBe(200);
+    expect(fetchUrl).toBe(validatedUrl);
+    expect(fetchBody).toBe(body);
+    expect(fetchMethod).toBe("POST");
   });
 
   test("the bridge origin is environment-configurable and loopback by default", () => {

@@ -22,6 +22,7 @@ export function ConversationMessage(): ReactElement {
   const createdAt = useAuiState((state) => state.message.createdAt);
   const transcriptTimestamp = useAuiState((state) => state.message.metadata.custom.transcriptTimestamp);
   const timestamp = typeof transcriptTimestamp === "string" ? transcriptTimestamp : "";
+  const sendStatus = useAuiState((state) => state.message.metadata.custom.sendStatus);
 
   return (
     <MessagePrimitive.Root asChild>
@@ -33,6 +34,11 @@ export function ConversationMessage(): ReactElement {
         <time className="mt-2 block text-right text-[10px] text-neutral-500" dateTime={timestamp || undefined}>
           {timestamp ? createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
         </time>
+        {sendStatus === "pending" ? <p className="mt-1 text-right text-[10px] text-neutral-400">Sending · awaiting history confirmation</p> : null}
+        {sendStatus === "sent" ? <p className="mt-1 text-right text-[10px] text-green-300">Delivered</p> : null}
+        {sendStatus === "unknown" ? <p className="mt-1 text-right text-[10px] text-amber-300">Delivery unknown</p> : null}
+        {sendStatus === "text-entered" ? <p className="mt-1 text-right text-[10px] text-amber-300">Text entered; submit pending</p> : null}
+        {sendStatus === "failed" ? <p className="mt-1 text-right text-[10px] text-red-300">Not delivered</p> : null}
       </article>
     </MessagePrimitive.Root>
   );

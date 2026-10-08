@@ -3,14 +3,16 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { transcriptToMessages, type PaneHistoryResponse } from "@homeling/contracts";
+import { mergeTranscripts, transcriptToMessages, type PaneHistoryResponse } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
 import { Link, useParams } from "react-router";
-import { fetchPaneHistory } from "./api.ts";
+import { fetchPaneHistory, ReplyRequestError, sendPaneReply } from "./api.ts";
 import { toAssistantMessages } from "./assistant-messages.ts";
 import { ConversationMessage } from "./ConversationMessage.tsx";
-import { historyReducer, initialHistoryState, type HistoryAction } from "./history-reducer.ts";
-import { startSerialPolling } from "./polling.ts";
+import { historyReducer, initialHistoryState, optimisticEntries, reconcileOutgoing, type HistoryAction, type OutgoingMessage } from "./history-reducer.ts";
+import { startAbortableSerialPolling } from "./polling.ts";
+import { ReplyComposer } from "./ReplyComposer.tsx";
+import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
 type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 
@@ -18,19 +20,65 @@ interface PaneConversationProps {
   paneId: string;
 }
 
+function failureLabel(message: OutgoingMessage): string {
+  if (message.deliveryUnknown) return "Delivery unknown; retry may duplicate";
+  if (message.textDelivered) return "Text entered; submit again?";
+  return "Send failed";
+}
+
 function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const outgoingRef = useRef(history.outgoing);
+  outgoingRef.current = history.outgoing;
+  const confirmedMessageIds = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sendBlocked, setSendBlocked] = useState(false);
+  const sendBlockedRef = useRef(false);
+  const blockedMessageIds = useRef(new Set<string>());
+  const sendQueue = useRef(createDeferredSendQueue());
+  const sendAttemptSequence = useRef(0);
+  const queuedMessageIds = useRef(new Set<string>());
   const requestSequence = useRef(0);
   const latestSuccessSequence = useRef(0);
   const activeController = useRef<AbortController | null>(null);
+
+  function setComposerBlocked(blocked: boolean): void {
+    sendBlockedRef.current = blocked;
+    setSendBlocked(blocked);
+  }
+
+  function blockUntilResolved(id: string): void {
+    blockedMessageIds.current.add(id);
+    sendQueue.current.block(id);
+    setComposerBlocked(true);
+  }
+
+  function unblockResolved(id: string): void {
+    blockedMessageIds.current.delete(id);
+    sendQueue.current.unblock(id);
+    setComposerBlocked(blockedMessageIds.current.size > 0);
+  }
+
+  useEffect(() => {
+    for (const message of history.outgoing) {
+      if (message.matchedUuid && blockedMessageIds.current.has(message.id)) unblockResolved(message.id);
+    }
+    setComposerBlocked(blockedMessageIds.current.size > 0);
+  }, [history.outgoing]);
 
   function receiveHistory(response: PaneHistoryResponse, requestId: number, pageKind?: HistoryPageKind): void {
     if (!response.available) {
       dispatch({ type: "unavailable", paneId, requestId });
       if (requestId >= latestSuccessSequence.current) setError(`history ${response.reason}`);
       return;
+    }
+    const confirmationEntries = mergeTranscripts([historyRef.current.entries, response.entries]);
+    for (const message of reconcileOutgoing(outgoingRef.current, confirmationEntries)) {
+      if (message.matchedUuid) confirmedMessageIds.current.add(message.id);
     }
     dispatch({
       type: "received", paneId, requestId, entries: response.entries, pageKind,
@@ -43,26 +91,23 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   }
 
   useEffect(() => {
-    const ctrl = new AbortController();
-    activeController.current = ctrl;
-    async function poll(): Promise<void> {
+    const session = startAbortableSerialPolling(async (signal) => {
       const requestId = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId });
       try {
-        const response = await fetchPaneHistory(paneId, ctrl.signal);
-        if (ctrl.signal.aborted) return;
+        const response = await fetchPaneHistory(paneId, signal);
+        if (signal.aborted) return;
         receiveHistory(response, requestId);
       } catch (err: unknown) {
-        if (!ctrl.signal.aborted && requestId >= latestSuccessSequence.current) {
+        if (!signal.aborted && requestId >= latestSuccessSequence.current) {
           setError(err instanceof Error ? err.message : "history failed");
         }
       }
-    }
-    const stopPolling = startSerialPolling(poll, 2000);
+    }, 2000);
+    activeController.current = session.controller;
     return () => {
-      ctrl.abort();
-      if (activeController.current === ctrl) activeController.current = null;
-      stopPolling();
+      if (activeController.current === session.controller) activeController.current = null;
+      session.stop();
     };
   }, [paneId]);
 
@@ -86,12 +131,85 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
     }
   }
 
-  const runtimeMessages = useMemo(() => toAssistantMessages(transcriptToMessages(history.entries)), [history.entries]);
+  function sendMessage(text: string, existing?: OutgoingMessage): void {
+    if (sendBlockedRef.current && !existing) return;
+    if (existing && queuedMessageIds.current.has(existing.id)) return;
+    const outgoing: OutgoingMessage = existing
+      ? { ...existing, status: "pending", retryQueued: true }
+      : {
+          id: `optimistic-${crypto.randomUUID()}`,
+          text,
+          sentAt: Date.now(),
+          attemptOrder: ++sendAttemptSequence.current,
+          status: "pending",
+        };
+    queuedMessageIds.current.add(outgoing.id);
+    if (existing) {
+      outgoingRef.current = outgoingRef.current.map((message) => message.id === existing.id ? outgoing : message);
+      dispatch({ type: "outgoing-retry", paneId, id: existing.id });
+    } else {
+      outgoingRef.current = [...outgoingRef.current, outgoing];
+      dispatch({
+        type: "outgoing-added", paneId, id: outgoing.id, text: outgoing.text,
+        sentAt: outgoing.sentAt, attemptOrder: outgoing.attemptOrder,
+      });
+    }
+
+    void enqueueUnlessConfirmed(
+      sendQueue.current,
+      outgoing.id,
+      () => {
+        const confirmed = confirmedMessageIds.current.has(outgoing.id) ||
+          historyRef.current.outgoing.some((message) => message.id === outgoing.id && message.matchedUuid);
+        if (confirmed) unblockResolved(outgoing.id);
+        return confirmed;
+      },
+      async () => {
+        const attemptOrder = ++sendAttemptSequence.current;
+        outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
+          ? { ...message, attemptOrder, retryQueued: false }
+          : message);
+        dispatch({ type: "outgoing-attempt-started", paneId, id: outgoing.id, attemptOrder });
+        try {
+          await sendPaneReply(paneId, existing?.textDelivered ? "" : outgoing.text);
+          if (existing?.textDelivered || existing?.deliveryUnknown) unblockResolved(outgoing.id);
+        } catch (err: unknown) {
+          const textDelivered = err instanceof ReplyRequestError ? err.textDelivered : null;
+          if (existing?.textDelivered || existing?.deliveryUnknown || textDelivered !== false) {
+            blockUntilResolved(outgoing.id);
+          }
+          dispatch({ type: "outgoing-failed", paneId, id: outgoing.id, textDelivered });
+        }
+      },
+    ).finally(() => queuedMessageIds.current.delete(outgoing.id));
+  }
+
+  function submitDraft(): void {
+    if (sendBlockedRef.current || !draft.trim()) return;
+    const text = draft;
+    setDraft("");
+    sendMessage(text);
+  }
+
+  const runtimeMessages = useMemo(() => {
+    const optimistic = optimisticEntries(history);
+    const visibleEntries = optimistic.length === 0
+      ? history.entries
+      : mergeTranscripts([history.entries, optimistic]);
+    const sendStatuses = new Map(
+      history.outgoing.map((message) => [
+        message.matchedUuid ?? message.id,
+        message.deliveryUnknown ? "unknown" : message.textDelivered ? "text-entered" : message.status,
+      ] as const),
+    );
+    return toAssistantMessages(transcriptToMessages(visibleEntries), sendStatuses);
+  }, [history.entries, history.outgoing]);
   const runtime = useExternalStoreRuntime({
     messages: runtimeMessages,
     convertMessage: (message) => message,
     onNew: async () => {},
   });
+  const failedMessages = history.outgoing.filter((message) => message.status === "failed");
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -127,6 +245,25 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
             </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
           </ThreadPrimitive.Viewport>
+          {failedMessages.length > 0 ? (
+            <section aria-label="发送失败的消息" className="max-h-28 overflow-y-auto border-t border-neutral-800 py-2">
+              {failedMessages.map((message) => (
+                <div key={message.id} className="flex items-center justify-between gap-3 py-1 text-xs text-red-300">
+                  <span className="truncate">
+                    {failureLabel(message)}: {message.text}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(message.text, message)}
+                    className="shrink-0 rounded-lg border border-red-800 px-3 py-1.5 text-red-200"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ))}
+            </section>
+          ) : null}
+          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>
