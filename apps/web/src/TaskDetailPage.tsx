@@ -33,7 +33,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   const historyRef = useRef(history);
   historyRef.current = history;
   const lockSession = useSessionSnapshot();
-  const sendQueue = useRef(createTaskSendQueue(sessionState.admit, (id) => {
+  const [sendQueue] = useState(() => createTaskSendQueue(sessionState.admit, (id) => {
     dispatch({ type: "outgoing-failed", paneId, id, textDelivered: false });
     queuedIds.current.delete(id);
   }));
@@ -77,7 +77,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     .map((part) => part.text)).join("\n"), [history.entries]);
 
   useEffect(() => {
-    if (!lockSession.ready) sendQueue.current.suspend();
+    if (!lockSession.ready) sendQueue.suspend();
   }, [lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
@@ -177,17 +177,17 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   const failed = history.outgoing.filter((message) => message.status === "failed");
 
   function blockUntilResolved(id: string): void {
-    sendQueue.current.block(id);
-    setComposerBlocked(sendQueue.current.isBlocked());
+    sendQueue.block(id);
+    setComposerBlocked(sendQueue.isBlocked());
   }
 
   function unblockResolved(id: string): void {
-    sendQueue.current.unblock(id);
-    setComposerBlocked(sendQueue.current.isBlocked());
+    sendQueue.unblock(id);
+    setComposerBlocked(sendQueue.isBlocked());
   }
 
   function sendMessage(text: string, existing?: OutgoingMessage): void {
-    if ((composerBlocked || sendQueue.current.isBlocked()) && !existing) return;
+    if ((composerBlocked || sendQueue.isBlocked()) && !existing) return;
     if (existing && queuedIds.current.has(existing.id)) return;
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
@@ -198,7 +198,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     } else {
       dispatch({ type: "outgoing-added", paneId, id: outgoing.id, text, sentAt: outgoing.sentAt, attemptOrder: outgoing.attemptOrder });
     }
-    void enqueueTaskSend(sendQueue.current, outgoing.id,
+    void enqueueTaskSend(sendQueue, outgoing.id,
       () => historyRef.current.outgoing.some((message) => message.id === outgoing.id && message.matchedUuid),
       async () => {
         const attemptOrder = ++sendAttempt.current;
@@ -215,7 +215,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   }
 
   function submitDraft(): void {
-    if (composerBlocked || sendQueue.current.isBlocked() || !draft.trim()) return;
+    if (composerBlocked || sendQueue.isBlocked() || !draft.trim()) return;
     const text = draft;
     setDraft("");
     sendMessage(text);
@@ -297,7 +297,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
               <button type="button" onClick={() => sendMessage(message.text, message)} disabled={queuedIds.current.has(message.id)} className="shrink-0 rounded-lg border border-red-800 px-3 py-1.5 text-red-200">Retry</button>
             </div>)}
           </section> : null}
-          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={composerBlocked} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={!lockSession.ready || composerBlocked} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

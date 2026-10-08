@@ -67,7 +67,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   const [sendBlocked, setSendBlocked] = useState(false);
   const sendBlockedRef = useRef(false);
   const blockedMessageIds = useRef(new Set<string>());
-  const sendQueue = useRef(createDeferredSendQueue(sessionState.admit, (id) => {
+  const [sendQueue] = useState(() => createDeferredSendQueue(sessionState.admit, (id) => {
     dispatch({ type: "outgoing-failed", paneId, id, textDelivered: false });
     queuedMessageIds.current.delete(id);
   }));
@@ -78,7 +78,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   const activeController = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!lockSession.ready) sendQueue.current.suspend();
+    if (!lockSession.ready) sendQueue.suspend();
   }, [lockSession.ready, lockSession.epoch]);
 
   function setComposerBlocked(blocked: boolean): void {
@@ -88,13 +88,13 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
 
   function blockUntilResolved(id: string): void {
     blockedMessageIds.current.add(id);
-    sendQueue.current.block(id);
+    sendQueue.block(id);
     setComposerBlocked(true);
   }
 
   function unblockResolved(id: string): void {
     blockedMessageIds.current.delete(id);
-    sendQueue.current.unblock(id);
+    sendQueue.unblock(id);
     setComposerBlocked(blockedMessageIds.current.size > 0);
   }
 
@@ -296,7 +296,7 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
     }
 
     void enqueueUnlessConfirmed(
-      sendQueue.current,
+      sendQueue,
       outgoing.id,
       () => {
         const confirmed = confirmedMessageIds.current.has(outgoing.id) ||
@@ -475,10 +475,10 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
           <SpecialKeyBar
             paneId={paneId}
             identity={controlIdentity}
-            disabled={sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
+            disabled={!lockSession.ready || sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
             onBlockedChange={(blocked) => { controlBlockedRef.current = blocked; setControlBlocked(blocked); }}
           />
-          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={!lockSession.ready || sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

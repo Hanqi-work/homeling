@@ -15,6 +15,28 @@ test("credential corruption or local rotation revokes already-admitted operation
   expect(() => controller.admission(req("", undefined, cookie), "alice")).toThrow("session.locked");
 });
 
+test("subject and global throttles count attempts without a cookie, regardless of newly generated session ids", async () => {
+  const controller = new SessionController({ verify: () => () => false, now: () => 1_000 });
+  for (let i = 0; i < 5; i++) expect((await controller.handle(req("/unlock", JSON.stringify({ secret }), `new=${i}`), "alice"))!.status).toBe(401);
+  expect((await controller.handle(req("/unlock", JSON.stringify({ secret })), "alice"))!.status).toBe(429);
+  for (let i = 0; i < 4; i++) expect((await controller.handle(req("/unlock", JSON.stringify({ secret })), `other${i}`))!.status).toBe(401);
+  expect((await controller.handle(req("/unlock", JSON.stringify({ secret })), "bob"))!.status).toBe(429);
+});
+test("unlock rejects an oversized streaming body without verifying or minting a cookie", async () => {
+  let verified = 0;
+  const controller = new SessionController({ verify: () => () => { verified++; return true; } });
+  const response = (await controller.handle(req("/unlock", "x".repeat(1_025)), "alice"))!;
+  expect(response.status).toBe(400); expect(response.headers.get("set-cookie")).toBeNull(); expect(verified).toBe(0);
+});
+
+test("a cancelled unlock body cannot consume a credential verification or mint a session", async () => {
+  let verified = 0;
+  const controller = new SessionController({ verify: () => () => { verified++; return true; } });
+  const abort = new AbortController(); abort.abort();
+  const response = (await controller.handle(new Request("https://home.ts.net/lite/api/session/unlock", { method: "POST", signal: abort.signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) }), "alice"))!;
+  expect(response.status).toBe(400); expect(verified).toBe(0); expect(response.headers.get("set-cookie")).toBeNull();
+});
+
 test("unlock alone mints a strict HTTPS cookie; polls and activity never resurrect a locked session", async () => {
   const controller = new SessionController({ verify: () => (input) => input === secret });
   expect((await controller.handle(req(""), "alice"))!.status).toBe(200);

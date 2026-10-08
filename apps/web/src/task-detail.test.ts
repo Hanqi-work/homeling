@@ -28,7 +28,7 @@ describe("task detail projection", () => {
   });
 
   test("holds B behind A's partial text until explicit retry succeeds, without faking delivery", async () => {
-    const queue = createTaskSendQueue();
+    const queue = createTaskSendQueue(() => () => {});
     const bridgeCalls: string[] = [];
     let inputBuffer = "";
     let historyAvailable = false;
@@ -66,7 +66,7 @@ describe("task detail projection", () => {
   });
 
   test("history confirmation also releases an unknown-delivery queue lock", async () => {
-    const queue = createTaskSendQueue();
+    const queue = createTaskSendQueue(() => () => {});
     await expect(enqueueTaskSend(queue, "unknown-A", () => false, async () => {
       throw new Error("delivery unknown");
     }).catch((error: unknown) => { queue.block("unknown-A"); throw error; })).rejects.toThrow("delivery unknown");

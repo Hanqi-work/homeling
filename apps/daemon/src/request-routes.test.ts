@@ -76,7 +76,7 @@ describe("pending request daemon routes", () => {
       return Response.json({ ok: true });
     };
     const path = "/lite/api/pane/w1:p1/stop";
-    const remote = { host: config.tailscaleHost, remoteAddress: "100.64.0.2", login: "me@github.com", contentType: "application/json", method: "POST" };
+    const remote = { host: config.tailscaleHost, remoteAddress: "127.0.0.1", login: "me@github.com", contentType: "application/json", method: "POST" };
     const noOrigin = await handleRequest(request(path, { ...remote, body: "{}" }), config, fetcher);
     const badOrigin = await handleRequest(request(path, { ...remote, origin: "https://evil.example", body: "{}" }), config, fetcher);
     expect(noOrigin.status).toBe(403);

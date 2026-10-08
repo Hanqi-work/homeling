@@ -14,15 +14,20 @@ async function readSmallJson(req: Request): Promise<unknown> {
   if (!reader) throw new Error("body required");
   let bytes = 0;
   const chunks: Uint8Array[] = [];
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(5_000)]);
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
   try {
     for (;;) {
+      if (signal.aborted) throw new Error("unlock body cancelled");
       const { done, value } = await reader.read();
+      if (signal.aborted) throw new Error("unlock body cancelled");
       if (done) break;
       bytes += value.byteLength;
       if (bytes > 1_024) throw new Error("body too large");
       chunks.push(value);
     }
-  } finally { await reader.cancel().catch(() => undefined); }
+  } finally { signal.removeEventListener("abort", cancel); await reader.cancel().catch(() => undefined); }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 export class SessionController {

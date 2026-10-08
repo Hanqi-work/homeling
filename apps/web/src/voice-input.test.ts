@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { SessionStateStore } from "./session-state.ts";
 import { VoiceInput, type AudioRecorder, type VoiceInputDependencies } from "./voice-input.ts";
 
-function fixture() {
+function fixture(admit: () => (() => void) = () => () => {}) {
   let stopped = 0;
   let calls = 0;
   const recorder: AudioRecorder = {
@@ -15,17 +16,27 @@ function fixture() {
     },
   };
   const dependencies: VoiceInputDependencies = {
+    admit,
     getStream: async () => ({ getTracks: () => [{ stop: () => { stopped++; } }] }),
     createRecorder: () => recorder,
     transcribe: async (audio) => { calls++; expect(audio.type).toBe("audio/mp4"); return "请继续"; },
   };
   const drafts: string[] = [];
   const states: string[] = [];
-  const voice = new VoiceInput(dependencies, (state) => states.push(state.phase), (text) => drafts.push(text));
+  const voice = new VoiceInput(dependencies, (state) => states.push(state.phase), (text) => drafts.push(text), admit);
   return { voice, dependencies, recorder, drafts, states, stopped: () => stopped, calls: () => calls };
 }
 
 describe("voice input recording boundary", () => {
+  test("a recording from before lock cannot auto-transcribe under a newly unlocked epoch", async () => {
+    const session = new SessionStateStore(); session.apply({ locked: false, epoch: 1, generation: "boot" }); session.caughtUp();
+    const f = fixture(session.admit);
+    await f.voice.start(); expect(f.recorder.state).toBe("recording");
+    session.lock(); session.apply({ locked: false, epoch: 2, generation: "boot" }); session.caughtUp();
+    f.voice.stop(); await Promise.resolve(); await Promise.resolve();
+    expect(f.calls()).toBe(0); expect(f.drafts).toEqual([]);
+    expect(f.states.at(-1)).toBe("error"); f.voice.cancel();
+  });
   test("permission denial is visible and can be retried", async () => {
     const f = fixture();
     f.dependencies.getStream = async () => { throw new DOMException("denied", "NotAllowedError"); };
