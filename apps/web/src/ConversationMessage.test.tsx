@@ -54,6 +54,37 @@ describe("ConversationMessage — external store runtime", () => {
     expect(markup.indexOf("Bash:")).toBeLessThan(markup.indexOf("after tool"));
   });
 
+  test("thinking and transcript updates keep message DOM IDs stable when older history is prepended", () => {
+    const history: TranscriptEntry[] = [
+      { uuid: "empty-thinking", ts: "2026-10-01T00:00:00Z", role: "assistant", parts: [{ kind: "thinking", text: "" }] },
+      { uuid: "user-1", ts: "2026-10-01T00:00:01Z", role: "user", parts: [{ kind: "text", text: "question" }] },
+      { uuid: "assistant-1", ts: "2026-10-01T00:00:02Z", role: "assistant", parts: [
+        { kind: "thinking", text: "useful reasoning summary" },
+        { kind: "text", text: "first response" },
+      ] },
+    ];
+
+    const initialMessages = transcriptToMessages(history);
+    expect(initialMessages.map(({ id }) => id)).toEqual(["user-1", "assistant-1"]);
+    expect(initialMessages[1]?.content[0]).toEqual({ type: "text", text: "useful reasoning summary" });
+    const initialMarkup = renderToStaticMarkup(<Transcript messages={initialMessages} />);
+    const messageIds = (markup: string) => [...markup.matchAll(/data-message-id="([^"]+)"/g)].map((match) => match[1]);
+    expect(messageIds(initialMarkup)).toEqual(["user-1", "assistant-1"]);
+
+    const updatedParts: TranscriptEntry["parts"] = [
+      { kind: "thinking", text: "useful reasoning summary" },
+      { kind: "text", text: "updated response" },
+    ];
+    const updatedHistory: TranscriptEntry[] = [
+      { uuid: "older-1", ts: "2026-10-01T00:00:00.500Z", role: "assistant", parts: [{ kind: "text", text: "older answer" }] },
+      ...history.map((entry) => entry.uuid === "assistant-1" ? { ...entry, parts: updatedParts } : entry),
+    ];
+    const updatedMarkup = renderToStaticMarkup(<Transcript messages={transcriptToMessages(updatedHistory)} />);
+    expect(messageIds(updatedMarkup)).toEqual(["older-1", "user-1", "assistant-1"]);
+    expect(updatedMarkup).toContain("updated response");
+    expect(updatedMarkup).not.toContain('data-message-id="empty-thinking"');
+  });
+
   test("undated messages do not display a runtime-generated timestamp", () => {
     const markup = renderEntries([{ uuid: "undated", ts: "", role: "assistant", parts: [{ kind: "text", text: "no timestamp" }] }]);
     expect(markup).toContain('data-message-id="undated"');
