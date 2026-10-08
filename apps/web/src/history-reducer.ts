@@ -7,6 +7,7 @@ export interface OutgoingMessage {
   /** Monotonic order of the latest send attempt, including retries. */
   readonly attemptOrder: number;
   readonly retryQueued?: boolean;
+  readonly confirmationText?: string;
   readonly status: "pending" | "sent" | "failed";
   readonly matchedUuid?: string;
   readonly matchedAt?: number;
@@ -41,7 +42,8 @@ export type HistoryAction =
   | { type: "outgoing-added"; paneId: string; id: string; text: string; sentAt: number; attemptOrder?: number }
   | { type: "outgoing-failed"; paneId: string; id: string; textDelivered: boolean | null }
   | { type: "outgoing-retry"; paneId: string; id: string }
-  | { type: "outgoing-attempt-started"; paneId: string; id: string; attemptOrder: number };
+  | { type: "outgoing-attempt-started"; paneId: string; id: string; attemptOrder: number }
+  | { type: "outgoing-confirmation-text"; paneId: string; id: string; text: string };
 
 export function initialHistoryState(paneId: string): HistoryState {
   return {
@@ -89,7 +91,7 @@ export function reconcileOutgoing(outgoing: OutgoingMessage[], entries: Transcri
         const matchIndex = entries.findIndex((entry, index) => {
           if (index <= cursor || entry.role !== "user" || entry.abandoned === true || used.has(entry.uuid)) return false;
           const timestamp = Date.parse(entry.ts);
-          return Number.isFinite(timestamp) && timestamp >= Math.max(message.sentAt, cursorTimestamp) && entryText(entry) === message.text;
+          return Number.isFinite(timestamp) && timestamp >= Math.max(message.sentAt, cursorTimestamp) && entryText(entry) === (message.confirmationText ?? message.text);
         });
         if (matchIndex === -1) {
           blocked = true;
@@ -132,6 +134,12 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     return { ...state, outgoing: [...state.outgoing, {
       id: action.id, text: action.text, sentAt: action.sentAt, attemptOrder, status: "pending",
     }] };
+  }
+  if (action.type === "outgoing-confirmation-text") {
+    const outgoing = state.outgoing.map((message) => message.id === action.id && !message.matchedUuid
+      ? { ...message, confirmationText: action.text }
+      : message);
+    return { ...state, outgoing: reconcileOutgoing(outgoing, state.entries) };
   }
   if (action.type === "outgoing-failed" || action.type === "outgoing-retry" || action.type === "outgoing-attempt-started") {
     return {

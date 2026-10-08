@@ -8,9 +8,45 @@ import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
+import { HerdrRpcError, HerdrSocketClient } from "./herdr-client.ts";
+import { PersonaRegistry } from "./persona-registry.ts";
+import {
+  createEventObserver, createPersona, deletePersona, launchPersonaTask, listPersonas, recoverPersonas,
+  sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
+} from "./persona-service.ts";
 
 export const API_HEALTH_PATH = "/lite/api/health";
 export const API_REQUESTS_PATH = "/lite/api/requests";
+export const API_PERSONA_PATH = "/lite/api/persona";
+
+const personaRuntimes = new WeakMap<DaemonConfig, PersonaRuntime>();
+function personaRuntime(cfg: DaemonConfig, fetcher: BridgeFetch): PersonaRuntime {
+  let runtime = personaRuntimes.get(cfg);
+  if (!runtime) {
+    runtime = {
+      cfg,
+      fetcher,
+      registry: new PersonaRegistry(cfg.registryPath),
+      herdr: new HerdrSocketClient({ socketPath: cfg.herdrSocketPath }),
+    };
+    personaRuntimes.set(cfg, runtime);
+  }
+  return runtime;
+}
+
+function isPersonaWrite(pathname: string): boolean {
+  return pathname === API_PERSONA_PATH || /^\/lite\/api\/persona\/[^/]+(?:\/message)?$/.test(pathname);
+}
+
+function jsonRequired(req: Request): boolean {
+  const mediaType = req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json";
+}
+
+async function readJson(req: Request): Promise<unknown | null> {
+  try { return await req.json(); } catch { return null; }
+}
+
 
 const requestStores = new WeakMap<DaemonConfig, PendingRequestStore>();
 function requestStore(cfg: DaemonConfig): PendingRequestStore {
@@ -50,6 +86,7 @@ export async function handleRequest(
   req: Request & { remoteAddress?: string | null },
   cfg: DaemonConfig,
   fetcher: BridgeFetch = fetch,
+  runtimeOverride?: PersonaRuntime,
 ): Promise<Response> {
   const denied = checkAccess(req, accessConfigOf(cfg));
   if (!denied.ok) {
@@ -64,7 +101,8 @@ export async function handleRequest(
     pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys)$/.test(pathname)
   );
   const isApprovalPost = req.method === "POST" && /^\/lite\/api\/requests\/[^/]+\/approve$/.test(pathname);
-  if ((isBridgeWritePost || isApprovalPost) && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
+  const isPersonaWriteRequest = isPersonaWrite(pathname) && req.method !== "GET";
+  if ((isBridgeWritePost || isApprovalPost || isPersonaWriteRequest) && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
     return new Response("cross-origin rejected\n", {
       status: 403,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -73,6 +111,59 @@ export async function handleRequest(
 
   if (pathname === API_HEALTH_PATH || pathname === "/api/health") {
     return Response.json({ ok: true, service: "homeling-daemon" });
+  }
+
+  const runtime = runtimeOverride ?? personaRuntime(cfg, fetcher);
+  if (pathname === `${API_PERSONA_PATH}/list` && req.method === "GET") {
+    try {
+      return Response.json({ personas: await listPersonas(runtime) });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Herdr snapshot unavailable", code: error instanceof HerdrRpcError ? error.code : "herdr.unavailable" }, { status: 502 });
+    }
+  }
+  if (pathname === API_PERSONA_PATH && req.method === "POST") {
+    if (!jsonRequired(req)) return Response.json({ error: "application/json required" }, { status: 415 });
+    const input = validatePersonaInput(await readJson(req));
+    if (!input) return Response.json({ error: "invalid persona" }, { status: 400 });
+    try {
+      const persona = await createPersona(runtime, input, req.headers.get("tailscale-user-login"));
+      return Response.json({ persona: { ...persona, status: "active" } }, { status: 201 });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Persona creation failed", code: error instanceof HerdrRpcError ? error.code : "persona.create_failed" }, { status: 502 });
+    }
+  }
+  const personaMessageMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/message$/);
+  if (personaMessageMatch && req.method === "POST") {
+    if (!jsonRequired(req)) return Response.json({ error: "application/json required" }, { status: 415 });
+    const body = await readJson(req) as { text?: unknown } | null;
+    if (!body || typeof body.text !== "string" || body.text.trim().length === 0 || body.text.length > 100_000) {
+      return Response.json({ error: "text required" }, { status: 400 });
+    }
+    let id: string;
+    try { id = decodeURIComponent(personaMessageMatch[1]!); } catch { return Response.json({ error: "invalid persona id" }, { status: 400 }); }
+    try { return await sendPersonaMessage(runtime, id, body.text, req.headers.get("tailscale-user-login")); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Message delivery failed", code: "persona.message_failed" }, { status: 502 }); }
+  }
+  const personaMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)$/);
+  if (personaMatch && (req.method === "PATCH" || req.method === "DELETE")) {
+    let id: string;
+    try { id = decodeURIComponent(personaMatch[1]!); } catch { return Response.json({ error: "invalid persona id" }, { status: 400 }); }
+    if (req.method === "PATCH") {
+      if (!jsonRequired(req)) return Response.json({ error: "application/json required" }, { status: 415 });
+      const patch = validatePersonaPatch(await readJson(req));
+      if (!patch) return Response.json({ error: "invalid persona patch" }, { status: 400 });
+      try {
+        const persona = await updatePersona(runtime, id, patch);
+        return persona ? Response.json({ persona }) : Response.json({ error: "persona not found" }, { status: 404 });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Persona update failed", code: "persona.update_failed" }, { status: 502 }); }
+    }
+    try {
+      const result = await deletePersona(runtime, id);
+      return result.deleted ? Response.json(result) : Response.json({ error: "persona not found" }, { status: 404 });
+    } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Persona delete failed", code: "persona.delete_failed" }, { status: 502 }); }
+  }
+  if (isPersonaWrite(pathname) && req.method !== "POST" && req.method !== "PATCH" && req.method !== "DELETE") {
+    return new Response("method not allowed\\n", { status: 405, headers: { allow: "GET, POST, PATCH, DELETE" } });
   }
 
   const store = requestStore(cfg);
@@ -113,6 +204,17 @@ export async function handleRequest(
     return Response.json(outcome, { status: outcome.status === "expired" ? 409 : 200 });
   }
 
+  if (pathname === `${BROWSER_API_PREFIX}launch` && req.method === "POST") {
+    const body = await req.clone().json().catch(() => null) as { personaId?: unknown; command?: unknown } | null;
+    if (body && Object.hasOwn(body, "personaId")) {
+      if (!jsonRequired(req)) return Response.json({ ok: false, error: "application/json required", code: "request.content_type" }, { status: 415 });
+      if (typeof body.personaId !== "string" || typeof body.command !== "string") {
+        return Response.json({ ok: false, error: "personaId and command required", code: "request.invalid" }, { status: 400 });
+      }
+      return launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"));
+    }
+  }
+
   if (pathname.startsWith(BROWSER_API_PREFIX)) {
     if (req.method === "POST" && !isBridgeWritePost) {
       return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
@@ -139,6 +241,11 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
     hostname: cfg.hostname,
     fetch,
   });
+  const runtime = personaRuntime(cfg, globalThis.fetch);
+  void recoverPersonas(runtime).catch((error: unknown) => {
+    console.error(`[homeling-daemon] persona recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  createEventObserver(runtime);
   console.log(`[homeling-daemon] listening on http://${cfg.hostname}:${cfg.port} serving ${cfg.webDist} at /lite/`);
   return server;
 }

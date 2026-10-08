@@ -1,4 +1,4 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, SnapshotResponse } from "@homeling/contracts";
+import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
@@ -16,6 +16,39 @@ export function fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
   return getJson("snapshot", signal);
 }
 
+export function fetchPersonas(signal?: AbortSignal): Promise<PersonaListResponse> {
+  return getJson("persona/list", signal);
+}
+
+export async function createPersona(input: { name: string; avatar: { color: string }; systemPrompt?: string }): Promise<PersonaView> {
+  const response = await fetch(`${API_PREFIX}persona`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const result = await response.json().catch(() => null) as { persona?: PersonaView; error?: string } | null;
+  if (!response.ok || !result?.persona) throw new Error(result?.error ?? `Create persona failed (${response.status})`);
+  return result.persona;
+}
+
+export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
+  const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean; personaConfirmationText?: string } = {};
+  try { result = await response.json() as typeof result; } catch { /* use HTTP fallback */ }
+  if (!response.ok || result.ok !== true) {
+    throw new ReplyRequestError(
+      result.error ?? `message ${response.status}`,
+      typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      result.personaConfirmationText,
+    );
+  }
+  return result.personaConfirmationText;
+}
+
 export function fetchLaunchers(signal?: AbortSignal): Promise<LaunchersResponse> {
   return getJson("launchers", signal);
 }
@@ -28,10 +61,12 @@ export class LaunchRequestError extends Error {
 }
 
 /** The daemon re-proxies Collie's launch endpoint; a task exists only after its pane id is returned. */
-export async function launchTask(launcher: Launcher, paneId?: string): Promise<Extract<CreateResponse, { ok: true }>> {
-  const body = paneId === undefined
-    ? { command: launcher.command }
-    : { command: launcher.command, paneId };
+export async function launchTask(launcher: Launcher, paneId?: string, personaId?: string): Promise<Extract<CreateResponse, { ok: true }>> {
+  const body = personaId !== undefined
+    ? { command: launcher.command, personaId }
+    : paneId === undefined
+      ? { command: launcher.command }
+      : { command: launcher.command, paneId };
   const response = await fetch(`${API_PREFIX}launch`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
@@ -81,7 +116,11 @@ export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: 
 }
 
 export class ReplyRequestError extends Error {
-  constructor(message: string, readonly textDelivered: boolean | null = null) {
+  constructor(
+    message: string,
+    readonly textDelivered: boolean | null = null,
+    readonly confirmationText?: string,
+  ) {
     super(message);
     this.name = "ReplyRequestError";
   }
