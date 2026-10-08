@@ -460,9 +460,9 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
             paneId={paneId}
             identity={controlIdentity}
             disabled={sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
-            onBlockedChange={(busy) => { controlBlockedRef.current = busy; setControlBlocked(busy); }}
+            onBlockedChange={(blocked) => { controlBlockedRef.current = blocked; setControlBlocked(blocked); }}
           />
-          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

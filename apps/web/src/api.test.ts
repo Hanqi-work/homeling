@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey } from "./api.ts";
+import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -23,6 +23,25 @@ describe("control key API", () => {
     expect((await sendPaneControlKey("p", "interrupt", "i")).outcome).toBe("unknown");
     globalThis.fetch = (async () => new Response("identity required", { status: 401 })) as unknown as typeof fetch;
     expect((await sendPaneControlKey("p", "interrupt", "i")).outcome).toBe("not-submitted");
+  });
+});
+
+describe("STT API", () => {
+  test("uploads raw recorder bytes with cancellation and returns text without a reply call", async () => {
+    const audio = new Blob(["clip"], { type: "audio/mp4" });
+    const controller = new AbortController();
+    const urls: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      expect(init?.body).toBe(audio);
+      expect(new Headers(init?.headers).get("content-type")).toBe("audio/mp4");
+      expect(init?.signal).toBeDefined();
+      controller.abort();
+      expect(init?.signal?.aborted).toBe(true);
+      return Response.json({ ok: true, text: "请继续" });
+    }) as typeof fetch;
+    await expect(transcribeAudio(audio, controller.signal)).resolves.toBe("请继续");
+    expect(urls).toEqual(["/lite/api/stt"]);
   });
 });
 

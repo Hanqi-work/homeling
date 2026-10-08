@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
+import { act, useState } from "react";
+import { ReplyComposer } from "./ReplyComposer.tsx";
 import { SpecialKeyBar, ControlKeyInteraction } from "./SpecialKeyBar.tsx";
 
 test("key strip exposes real cancellation controls and explains disabled authorizing keys", () => {
@@ -67,6 +70,62 @@ test("identity invalidation cancels confirmation without releasing an in-flight 
   await pending;
   interaction.cancel();
   expect(interaction.view.unknown).toBe(true);
+});
+
+test("mounted key strip preserves in-flight and unknown composer isolation through snapshot identity loss", async () => {
+  const window = new Window();
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  const originalFetch = globalThis.fetch;
+  for (const [key, value] of Object.entries({ window, document: window.document, navigator: window.navigator, IS_REACT_ACT_ENVIRONMENT: true })) {
+    saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  let reject!: (error: Error) => void;
+  let keyCalls = 0;
+  let sends = 0;
+  globalThis.fetch = (async () => { keyCalls++; return new Promise<Response>((_resolve, fail) => { reject = fail; }); }) as unknown as typeof fetch;
+  function Harness({ identity }: { identity: string | null }) {
+    const [blocked, setBlocked] = useState(false);
+    const [draft, setDraft] = useState("preserve draft");
+    return <><SpecialKeyBar paneId="p" identity={identity} disabled={false} onBlockedChange={setBlocked} />
+      <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={() => { sends++; }} disabled={blocked}
+        disabledReason="取消键结果未知；不要刷新后重试。" /></>;
+  }
+  async function click(label: string) {
+    const button = [...container.querySelectorAll("button")].find((node) => node.textContent === label);
+    expect(button).toBeDefined();
+    await act(() => { button!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+  }
+  try {
+    await act(() => root.render(<Harness identity="i" />));
+    await click("Ctrl+C");
+    expect(keyCalls).toBe(0);
+    await click("确认发送");
+    expect(keyCalls).toBe(1);
+    expect(container.querySelector("textarea")!.disabled).toBe(true);
+    await act(() => root.render(<Harness identity={null} />));
+    await act(() => root.render(<Harness identity="i" />));
+    expect(container.querySelector("textarea")!.disabled).toBe(true);
+    await act(async () => { reject(new Error("response lost")); });
+    expect(container.textContent).toContain("不要重复发送或刷新后重试");
+    expect(container.querySelector("textarea")!.disabled).toBe(true);
+    await click("Send");
+    expect(sends).toBe(0);
+    expect(container.querySelector("textarea")!.value).toBe("preserve draft");
+    expect(keyCalls).toBe(1);
+  } finally {
+    await act(() => root.unmount());
+    globalThis.fetch = originalFetch;
+    container.remove();
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+    window.close();
+  }
 });
 
 test("unavailable and approval states disable cancellation controls with a visible explanation", () => {

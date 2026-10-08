@@ -27,3 +27,12 @@
 - 合并 integration 1ea5775e 后曾 222 tests/typecheck/build 全绿；未知文本隔离修复后 224 tests/typecheck/build 绿。
 - integration 前进至 #10 b487ab05，再次 merge；保留 personaId taskStorageKey 与特殊键身份 imports 两边语义。发现新 persona/:id/message 不经过 reply proxy，补 sendPersonaMessage 锁内、实际 mainPaneId 提交点 controlKeyBlocksText。同一 HTTP 公共测试先红（200且写入）→绿（409+textDelivered:false，零 bridge reply）。这是跨票同一输入门接线，不扩展 persona 功能。
 - 本票 code-reviewer 终审 0 must-fix；主协调器另三只读复核确认原 unknown 隔离 P1 已撤销。
+- 最终又合并 integration ca826f05（#8 voice input）；保留 STT 音频例外、scopeId、voice 生命周期与特殊键 disabledReason/unknown 隔离。以冻结锁文件安装新增 happy-dom（沿用 #8 依赖），增加真实 React 挂载回归：在途 snapshot 身份消失/恢复不解锁，unknown 后仍不发文本且草稿保留。
+- 最终检查（ca826f05 已是祖先）：`bun test` 269 pass / 0 fail / 37 files；`bun run typecheck` 三包绿；`bun run build` 绿。无 push、无合入 integration、无 issue 改动。
+
+## Acceptance status
+
+- AC1 部分：固定 Ctrl+C、Escape 真实协议链已实现并 fixture 验证；手机/目标 TUI 真机接收尚待人工。Enter/Cmd 明确禁用，不称全键可用。
+- AC2 自动验证完成：上游 accepted / 明确未提交 / unknown 三态反馈，非 JSON/鉴权/读取错误可见；accepted 不冒充 TUI 消费。
+- AC3 自动验证完成：两种取消键均二次确认，前后端防并发及750ms冷却；unknown禁重试，同 pane 文本两条路径共用门。上游非原子窗口已明确披露。
+
