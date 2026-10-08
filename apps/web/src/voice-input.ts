@@ -1,5 +1,6 @@
 import { LocalizedUIError, type LocalizedCopy } from "./ui-copy.ts";
 import { transcribeAudio } from "./api.ts";
+import { ClientSessionLocked, sessionState } from "./session-state.ts";
 
 export interface AudioStream { getTracks(): { stop(): void }[] }
 export interface AudioRecorder {
@@ -12,6 +13,8 @@ export interface AudioRecorder {
   stop(): void;
 }
 export interface VoiceInputDependencies {
+  /** Explicit injectable admission for fake fixtures; the browser adapter defaults to sessionState. */
+  admit?: () => (() => void);
   getStream(): Promise<AudioStream>;
   createRecorder(stream: AudioStream): AudioRecorder;
   transcribe(audio: Blob, signal: AbortSignal): Promise<string>;
@@ -56,11 +59,13 @@ export class VoiceInput {
   private recorder: AudioRecorder | null = null;
   private controller: AbortController | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private checkAdmission: () => void = () => { throw new ClientSessionLocked(); };
 
   constructor(
     private readonly dependencies: VoiceInputDependencies,
     private readonly onState: (state: VoiceInputState) => void,
     private readonly onTranscript: (text: string) => void,
+    private readonly admit: () => (() => void) = dependencies.admit ?? sessionState.admit,
   ) {}
 
   private update(phase: VoiceInputState["phase"], message: string, copy?: LocalizedCopy): void {
@@ -100,12 +105,14 @@ export class VoiceInput {
     const generation = ++this.generation;
     this.update("permission", "正在请求麦克风权限…", { key: "voice.requestingPermission" });
     try {
+      this.checkAdmission = this.admit();
       const stream = await this.dependencies.getStream();
       if (generation !== this.generation) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       this.stream = stream;
+      this.checkAdmission();
       const recorder = this.dependencies.createRecorder(stream);
       this.recorder = recorder;
       const chunks: Blob[] = [];
@@ -136,7 +143,7 @@ export class VoiceInput {
       let message = error instanceof Error ? error.message : "无法录音，请检查麦克风后重试。";
       if (name === "NotAllowedError") message = "麦克风权限被拒绝，请在浏览器设置中允许后重试。";
       else if (name === "NotFoundError") message = "未找到麦克风，请连接设备后重试。";
-      const copy = name === "NotAllowedError" ? { key: "voice.permissionDenied" } : name === "NotFoundError" ? { key: "voice.microphoneNotFound" } : error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.recordingError", params: { error: error.message } } : { key: "voice.recordingUnavailable" };
+      const copy = name === "NotAllowedError" ? { key: "voice.permissionDenied" } : name === "NotFoundError" ? { key: "voice.microphoneNotFound" } : error instanceof ClientSessionLocked ? { key: "voice.locked" } : error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.recordingError", params: { error: error.message } } : { key: "voice.recordingUnavailable" };
       this.update("error", message, copy);
     }
   }
@@ -156,8 +163,10 @@ export class VoiceInput {
     this.controller = new AbortController();
     try {
       if (!audio.size) throw new LocalizedUIError("录音为空，请重试。", { key: "voice.emptyRecording" });
+      this.checkAdmission();
       const text = await this.dependencies.transcribe(audio, this.controller.signal);
       if (generation !== this.generation) return;
+      this.checkAdmission();
       if (!text.trim()) throw new LocalizedUIError("未识别到语音，请重试。", { key: "voice.noSpeechRecognized" });
       this.controller = null;
       this.update("idle", "转写已加入草稿，请编辑确认后发送。", { key: "voice.transcriptAdded" });
@@ -165,7 +174,7 @@ export class VoiceInput {
     } catch (error) {
       if (generation !== this.generation) return;
       this.controller = null;
-      this.update("error", error instanceof Error ? error.message : "转写失败，请重试。", error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.transcriptionError", params: { error: error.message } } : { key: "voice.transcriptionFailed" });
+      this.update("error", error instanceof Error ? error.message : "转写失败，请重试。", error instanceof ClientSessionLocked ? { key: "voice.locked" } : error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.transcriptionError", params: { error: error.message } } : { key: "voice.transcriptionFailed" });
     }
   }
 }

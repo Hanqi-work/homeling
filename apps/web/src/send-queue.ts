@@ -1,3 +1,5 @@
+import { sessionState } from "./session-state.ts";
+
 export type SendOperation = () => Promise<void>;
 export interface DeferredSendQueue {
   enqueue(id: string, operation: SendOperation): Promise<void>;
@@ -8,7 +10,7 @@ export interface DeferredSendQueue {
 interface QueuedSend { id: string; operation: SendOperation; check: () => void }
 /** Each item retains its admission from enqueue through every deferral; unlock never re-admits it. */
 export function createDeferredSendQueue(
-  admit: () => (() => void) = () => () => {},
+  admit: () => (() => void) = sessionState.admit,
   onSuspended: (id: string) => void = () => {},
 ): DeferredSendQueue {
   let tail: Promise<void> = Promise.resolve();

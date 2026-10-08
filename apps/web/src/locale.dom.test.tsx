@@ -16,6 +16,7 @@ import { RecordedTaskDetail } from "./ActivityTaskBoundary.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { sessionState } from "./session-state.ts";
 import { HomeTriage } from "./HomeTriage.tsx";
+import { PushSettings } from "./PushSettings.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -40,6 +41,15 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("actual push settings title, privacy hint and unsupported-device instructions change language", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><PushSettings /></LocaleProvider>));
+  const select = container.querySelector<HTMLSelectElement>("#homeling-language")!;
+  await act(async () => { select.value = "ja"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector("section h2")?.textContent).toBe("Homeling の通知");
+  expect(container.querySelector("section")?.textContent).toContain("ホーム画面");
+  expect(container.querySelector("section")?.textContent).toContain("プライバシー");
+});
 test("triage count grammar changes locale without refetching, changing scoped links or translating the agent question", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   const persona = { id: "m", name: "Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", status: "blocked" };
@@ -110,7 +120,7 @@ test("memory labels, fixed injection metadata and blocked-save notice switch lan
   const select = container.querySelector("select")!;
   await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
   expect(container.querySelector("h2")?.textContent).toBe("Dauerhafte Erinnerungen");
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("Speichern abgelehnt");
+  expect(textarea.closest("section")?.querySelector('[role="status"]')?.textContent).toContain("Speichern abgelehnt");
   expect(container.textContent).toContain("Erste Nachricht");
   expect(container.querySelector('textarea[name="facts"]')).toBe(textarea);
   expect((textarea as HTMLTextAreaElement).value).toBe("Facts 原始记忆");
@@ -124,9 +134,9 @@ test("a permission attempt refused before dispatch stays pending and its existin
   await act(async () => container.querySelector("button")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
   const select = container.querySelector("select")!;
   await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("Gesperrt");
+  expect(container.querySelector('article [role="status"]')?.textContent).toContain("Gesperrt");
   expect(container.querySelector("article")?.getAttribute("data-status")).toBe("pending");
-  expect(container.querySelector("button")?.disabled).toBe(false);
+  expect(container.querySelector<HTMLButtonElement>("article button")?.disabled).toBe(false);
   expect(container.textContent).toContain("Should I continue?");
   expect(container.textContent).toContain("Original agent option");
   expect(approvals).toBe(1);
@@ -143,7 +153,7 @@ test("special-key confirmation stays open and translates without sending a key",
 });
 test("voice permission error already on screen follows the language selection", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-  const dependencies = { getStream: async () => { throw new DOMException("denied", "NotAllowedError"); }, createRecorder: () => { throw new Error("not used"); }, transcribe: async () => "not used" };
+  const dependencies = { admit: () => () => {}, getStream: async () => { throw new DOMException("denied", "NotAllowedError"); }, createRecorder: () => { throw new Error("not used"); }, transcribe: async () => "not used" };
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><ReplyComposer draft="" onDraftChange={() => {}} onSend={() => {}} voiceDependencies={dependencies} /></LocaleProvider>));
   await act(async () => container.querySelector('[aria-label="Start voice input"]')!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
   const select = container.querySelector("select")!;

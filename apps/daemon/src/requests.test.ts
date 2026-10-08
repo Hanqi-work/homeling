@@ -81,6 +81,11 @@ test('registry removal clears cached pending persona identity rather than retain
   expect(refreshed.id).toBe(first.id);
   expect(refreshed).not.toHaveProperty('personaId');
   expect(store.listPending()[0]).not.toHaveProperty('personaId');
+  const taskStore = new PendingRequestStore();
+  const claimed = taskStore.observe(pane, detected, Date.now(), 'persona-removed', 'task-run')!;
+  expect(taskStore.claim(claimed.id)).toBe(true);
+  taskStore.observe(pane, detected, Date.now(), undefined);
+  expect(taskStore.listPending()[0]).not.toHaveProperty('personaId');
 });
 
 describe("pending request extraction", () => {

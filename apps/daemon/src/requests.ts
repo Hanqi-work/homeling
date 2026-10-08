@@ -259,7 +259,17 @@ export class PendingRequestStore {
     return generation === this.collectionGeneration;
   }
 
+  /** Metadata revocation must also apply while a write is claimed or a screen read is unavailable. */
+  refreshPersonaOwnership(paneId: string, personaId?: string): void {
+    this.requests = this.requests.map(request => {
+      if (request.paneId !== paneId || request.status !== 'pending' || request.personaId === personaId) return request;
+      const { personaId: _previousPersonaId, ...base } = request;
+      return { ...base, ...(personaId ? { personaId } : {}) };
+    });
+  }
+
   observe(pane: PaneWire, detected: DetectedRequest | null, now = Date.now(), personaId?: string, taskOccurrenceKey?: string): PendingRequest | null {
+    this.refreshPersonaOwnership(pane.paneId, personaId);
     const active = this.activeByPane.get(pane.paneId);
     if (!detected) {
       if (active && this.claimed.has(active.id)) return null;
@@ -276,11 +286,9 @@ export class PendingRequestStore {
         return null;
       }
       const options = detected.options.map(({ id, label }) => ({ id, label }));
-      const { personaId: _oldPersonaId, ...baseRequest } = existing;
-      const ownedRequest = { ...baseRequest, ...(personaId ? { personaId } : {}) };
       const refreshed: PendingRequest = detected.kind === "preview-select"
-        ? { ...ownedRequest, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
-        : { ...ownedRequest, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
+        ? { ...existing, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
+        : { ...existing, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
       this.requests = upsertPendingRequest(this.requests, refreshed);
       this.actions.set(active.id, new Map(detected.options.map((option) => [option.id, option.keys])));
       this.expire(now);
@@ -442,6 +450,16 @@ export async function collectPendingRequests(
       else store.expirePaneRequest(pane.paneId);
     } catch {
       // A transient read failure is not evidence that the approval disappeared.
+    }
+  }
+  if (resolvePersona && store.isCurrentCollection(generation)) {
+    // A failed/truncated screen cannot settle a request, but registry revocation still clears its owner.
+    for (const pending of store.listPending(now)) {
+      const pane = panes.find(item => item.paneId === pending.paneId);
+      if (!pane) continue;
+      const owner = await resolvePersona(pane);
+      if (!store.isCurrentCollection(generation)) break;
+      store.refreshPersonaOwnership(pane.paneId, typeof owner === 'string' ? owner : owner?.personaId);
     }
   }
   return store.listPending(now);

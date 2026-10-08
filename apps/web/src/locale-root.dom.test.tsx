@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import type { Root } from "react-dom/client";
 import { AppRoot } from "./AppRoot.tsx";
 import { LocaleProvider, LanguageSettings } from "./locale.tsx";
 import { sessionState } from "./session-state.ts";
+import { PushSettings } from "./PushSettings.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/p/p1" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -39,7 +40,8 @@ async function unlock() {
 }
 function fakeServer(onReply: () => Promise<Response>) {
   let locked = true;
-  let sessionWrites = 0;
+  let sessionWrites = 0, localeWrites = 0, enrollments = 0;
+  let remoteLocale = "en";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/session")) {
@@ -48,6 +50,9 @@ function fakeServer(onReply: () => Promise<Response>) {
       if (url.endsWith("/lock")) locked = true;
       return Response.json({ locked, available: true, epoch: locked ? 0 : 1, generation: "boot", idleDeadline: Date.now() + 900_000, absoluteDeadline: Date.now() + 28_800_000, serverNow: Date.now() });
     }
+    if (url.endsWith("/push/status")) return Response.json({ publicKey: "public", preferences: { enabled: false }, subscriptions: [{ endpoint: "https://fcm.googleapis.com/fcm/send/existing", locale: remoteLocale }], retractTags: [] });
+    if (url.endsWith("/push/subscribe")) { enrollments++; const update = JSON.parse(String(init?.body)); remoteLocale = update.locale ?? remoteLocale; return Response.json({ ok: true }, { status: 201 }); }
+    if (url.endsWith("/push/locale")) { localeWrites++; if (locked) return Response.json({ executed: false, deliveryUnknown: false }, { status: 423 }); const update = JSON.parse(String(init?.body)); remoteLocale = update.locale; return Response.json({ ok: true, locale: remoteLocale }); }
     if (url.endsWith("/reply")) return onReply();
     if (url.endsWith("/persona/list")) return Response.json({ personas: [] });
     if (url.endsWith("/snapshot")) return Response.json({ bridge: "connected", agents: [], shellPanes: [], workspaces: [], tabs: [], sessions: [], ts: Date.now() });
@@ -57,14 +62,87 @@ function fakeServer(onReply: () => Promise<Response>) {
     if (url.endsWith("/pane/p1")) return Response.json({ paneId: "p1", text: "Original terminal output 原文", truncated: false });
     throw new Error(`Unexpected fake request: ${url} ${init?.method}`);
   }) as typeof fetch;
-  return { sessionWrites: () => sessionWrites };
+  return { sessionWrites: () => sessionWrites, localeWrites: () => localeWrites, remoteLocale: () => remoteLocale, enrollments: () => enrollments };
 }
-async function mount(path = "/p/p1") {
+async function mount(path = "/p/p1", settings: ReactNode = <button data-other-settings>Push settings extension</button>) {
   sessionState.lock();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-  await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={[path]}><Location />{path !== "/settings" ? <LanguageSettings /> : null}<AppRoot slots={{ settings: <button data-other-settings>Push settings extension</button> }} /></MemoryRouter></LocaleProvider>));
+  await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={[path]}><Location />{path !== "/settings" ? <LanguageSettings /> : null}<AppRoot slots={{ settings }} /></MemoryRouter></LocaleProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
 }
+test("a failed native-language update remains visible across remount and does not replay on unlock", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(window.navigator, "serviceWorker");
+  const worker = { scope: `${window.location.origin}/lite/`, active: {}, pushManager: { getSubscription: async () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/existing" }) } };
+  Object.defineProperty(window.navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => worker } });
+  try {
+    const server = fakeServer(async () => { throw new Error("unexpected message write"); });
+    const transport = globalThis.fetch; let fail = true, attempts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => { if (String(input).endsWith("/push/locale")) { attempts++; if (fail) throw new Error("lost response"); } return transport(input, init); }) as typeof fetch;
+    await mount("/settings"); await unlock(); await changeLocale("de");
+    expect(attempts).toBe(1); expect(window.localStorage.getItem("homeling.pushLocalePending")).toBe("1");
+    await act(() => root.unmount()); container.remove();
+    await mount("/settings"); await unlock();
+    expect(attempts).toBe(1); expect(container.textContent).toContain("nicht synchronisiert");
+    fail = false;
+    await act(async () => container.querySelector("button[data-locale-sync]")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    expect(attempts).toBe(2); expect(server.localeWrites()).toBe(1); expect(window.localStorage.getItem("homeling.pushLocalePending")).toBeNull();
+  } finally { if (descriptor) Object.defineProperty(window.navigator, "serviceWorker", descriptor); else Reflect.deleteProperty(window.navigator, "serviceWorker"); }
+});
+test("production settings compose lock, push and language; only explicit enrollment allocates and carries the selected locale", async () => {
+  const descriptors = new Map<string, PropertyDescriptor | undefined>();
+  let current: PushSubscription | null = null, allocations = 0, permissions = 0;
+  const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/existing", toJSON: () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/existing", keys: { p256dh: "fixture", auth: "fixture" } }), unsubscribe: async () => true } as unknown as PushSubscription;
+  const worker = { scope: `${window.location.origin}/lite/`, active: {}, pushManager: { getSubscription: async () => current, subscribe: async () => { allocations++; current = subscription; return subscription; } } };
+  const define = (object: object, key: string, value: unknown) => { const id = object === window ? `window:${key}` : object === window.navigator ? `navigator:${key}` : `global:${key}`; descriptors.set(id, Object.getOwnPropertyDescriptor(object, key)); Object.defineProperty(object, key, { configurable: true, value }); };
+  const notification = { requestPermission: async () => { permissions++; return "granted"; } };
+  define(window.navigator, "serviceWorker", { getRegistration: async () => worker }); define(window, "PushManager", {}); define(window, "Notification", notification); define(window, "isSecureContext", true); define(globalThis, "Notification", notification);
+  try {
+    const server = fakeServer(async () => { throw new Error("unexpected message write"); });
+    await mount("/settings", <PushSettings />); await unlock(); await changeLocale("ja");
+    expect(permissions).toBe(0); expect(allocations).toBe(0); expect(server.enrollments()).toBe(0);
+    expect(container.textContent).toContain("Homeling の通知");
+    expect(container.textContent).toContain("Homeling をロック");
+    const enable = [...container.querySelectorAll("button")].find(item => item.textContent === "許可して登録")!;
+    await act(async () => enable.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    expect(permissions).toBe(1); expect(allocations).toBe(1); expect(server.enrollments()).toBe(1);
+    expect(server.remoteLocale()).toBe("ja"); expect(server.localeWrites()).toBe(0);
+    expect(container.textContent).toContain("このデバイスは登録済みです");
+  } finally {
+    for (const [id, descriptor] of descriptors) { const [scope, key] = id.split(":"); const object = scope === "window" ? window : scope === "navigator" ? window.navigator : globalThis; if (descriptor) Object.defineProperty(object, key!, descriptor); else Reflect.deleteProperty(object, key!); }
+  }
+});
+test("real locked settings persist locally, show unsynced, and unlock never replays a native preference update", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(window.navigator, "serviceWorker");
+  let allocations = 0;
+  const worker = { scope: `${window.location.origin}/lite/`, active: {}, pushManager: { getSubscription: async () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/existing" }), subscribe: async () => { allocations++; throw new Error("must not allocate"); } } };
+  Object.defineProperty(window.navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => worker } });
+  try {
+    const server = fakeServer(async () => { throw new Error("unexpected message write"); });
+    await mount("/settings");
+    const select = container.querySelector<HTMLSelectElement>("#homeling-locked-language")!;
+    await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+    expect(window.localStorage.getItem("homeling.locale")).toBe("de");
+    expect(container.textContent).toContain("ausdrücklich erneut synchronisieren");
+    expect(server.localeWrites()).toBe(0);
+    await unlock();
+    expect(server.localeWrites()).toBe(0);
+    const retry = container.querySelector<HTMLButtonElement>("button[data-locale-sync]")!;
+    expect(retry.disabled).toBe(false);
+    await act(async () => retry.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    expect(server.localeWrites()).toBe(1); expect(server.remoteLocale()).toBe("de"); expect(allocations).toBe(0);
+    expect(container.textContent).toContain("ist synchronisiert");
+  } finally { if (descriptor) Object.defineProperty(window.navigator, "serviceWorker", descriptor); else Reflect.deleteProperty(window.navigator, "serviceWorker"); }
+});
+test("production conversation shell and its launch confirmation change locale without dispatching a task", async () => {
+  let writes = 0;
+  fakeServer(async () => { writes++; return Response.json({ ok: true }); });
+  await mount(); await unlock(); await changeLocale("de");
+  expect(container.textContent).toContain("Aufgabe starten");
+  expect(container.textContent).toContain("Verlaufabfrage");
+  expect(container.querySelector('a[href="/"]')?.textContent).toBe("Zurück zu Homelings");
+  expect(container.querySelector("[data-location]")?.textContent).toBe("/p/p1");
+  expect(writes).toBe(0);
+});
 test("production task metadata and mirror controls change locale without translating terminal output", async () => {
   fakeServer(async () => { throw new Error("unexpected business write"); });
   await mount("/t/p1"); await unlock();

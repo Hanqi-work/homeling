@@ -8,3 +8,13 @@ dist/
 *.tsbuildinfo
 .vite/
 coverage/
+# Defensive only: real unlock state must live outside every repository.
+unlock-secret
+unlock-verifier.json
+.unlock-rotation-pending
+.unlock-secret.*.tmp
+.unlock-verifier.*.tmp
+# Defensive only: independent push keys/subscriptions also belong outside repositories.
+vapid.json
+push.json
+push.json.*.tmp

@@ -2,6 +2,7 @@ import { LOCALES, pushMessages } from "@homeling/contracts";
 import { detailMessages } from "./locale-detail-resources.ts";
 import { extensionMessages } from "./locale-extension-resources.ts";
 import { deliveredMessages } from "./locale-delivered-resources.ts";
+import { pushUiMessages } from "./locale-push-resources.ts";
 // Each row is en, de, es, ko, ja, zh. Only product-owned UI copy belongs here.
 export const messages = {
   "common.settings": ["Settings", "Einstellungen", "Ajustes", "설정", "設定", "设置"],
@@ -94,7 +95,7 @@ export const messages = {
   "page.notFound": ["Page not found", "Seite nicht gefunden", "Página no encontrada", "페이지를 찾을 수 없음", "ページが見つかりません", "页面不存在"],
   "persona.backHome": ["Back to Homelings", "Zurück zu Homelings", "Volver a Homelings", "Homelings로 돌아가기", "Homeling 一覧へ戻る", "返回伙伴列表"],
 } satisfies Record<string, readonly [string, string, string, string, string, string]>;
-const messageEntries = Object.entries({ ...messages, ...detailMessages, ...extensionMessages, ...deliveredMessages, ...pushMessages });
+const messageEntries = Object.entries({ ...messages, ...detailMessages, ...extensionMessages, ...deliveredMessages, ...pushMessages, ...pushUiMessages });
 export const localeResources: Record<string, Record<string, string>> = Object.fromEntries(
   LOCALES.map(({ code }, index) => [code, Object.fromEntries(messageEntries.map(([key, values]) => [key, values[index]!]))]),
 );

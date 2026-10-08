@@ -134,6 +134,16 @@ export async function deletePersona(personaId: string): Promise<PersonaDeleteRes
   return { deleted: result.deleted, archived: result.archived };
 }
 
+function replyDeliveryStatus(
+  result: { textDelivered?: boolean | null; deliveryUnknown?: boolean },
+  httpStatus: number,
+): boolean | null {
+  if (result.textDelivered === true) return true;
+  if (result.deliveryUnknown === true) return null;
+  if (typeof result.textDelivered === "boolean") return result.textDelivered;
+  return httpStatus < 500 ? false : null;
+}
+
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
   const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
     method: "POST",
@@ -145,7 +155,7 @@ export async function sendPersonaMessage(personaId: string, text: string): Promi
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `message ${response.status}`,
-      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      replyDeliveryStatus(result, response.status),
       result.personaConfirmationText,
     );
   }
@@ -312,7 +322,7 @@ export async function sendPaneReply(paneId: string, text: string, occurrenceKey?
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `reply ${response.status}`,
-      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      replyDeliveryStatus(result, response.status),
     );
   }
 }

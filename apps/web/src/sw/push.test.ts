@@ -1,6 +1,20 @@
 import { test, expect } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { postPushRetractions } from '../push-client.ts';
+
+test('actual foreground sender carries resolved tags to the lite worker and closes its displayed notification, never Collie or another origin', async () => {
+  const handlers = new Map<string, (event: any) => void>(); let closed = 0; let work: Promise<unknown> = Promise.resolve();
+  const self = { location: { origin: 'https://home.example' }, addEventListener: (kind: string, fn: (event: any) => void) => handlers.set(kind, fn), registration: { getNotifications: async ({ tag }: { tag: string }) => tag === 'homeling-request-resolved' ? [{ close() { closed++; } }] : [] } };
+  runInNewContext(await readFile(new URL('../../public/sw.js', import.meta.url), 'utf8'), { self, URL, console });
+  let posted = 0;
+  const registration = { scope: 'https://home.example/lite/', active: { postMessage(data: unknown) { posted++; handlers.get('message')!({ data, source: { url: 'https://home.example/lite/p/task' }, waitUntil(pending: Promise<unknown>) { work = pending; } }); } } } as unknown as ServiceWorkerRegistration;
+  const status = { publicKey: 'public', preferences: { enabled: true }, subscriptions: [], retractTags: ['homeling-request-resolved', 'collie-notification'] };
+  expect(postPushRetractions(registration, status, 'https://home.example')).toBe(1);
+  await work; expect(closed).toBe(1);
+  for (const scope of ['https://home.example/', 'https://home.example/liteevil/', 'https://evil.example/lite/']) expect(postPushRetractions({ ...registration, scope } as ServiceWorkerRegistration, status, 'https://home.example')).toBe(0);
+  expect(posted).toBe(1);
+});
 
 test('actual lite worker shows specific summary and clicks only same-origin lite deep-links', async () => {
   const handlers = new Map<string, (event: any) => void>();

@@ -7,6 +7,7 @@ import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { LocaleProvider, useLocale } from "./locale.tsx";
 import { PushSettings } from "./PushSettings.tsx";
+import { PushRetractions } from "./PushRetractions.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
@@ -25,6 +26,7 @@ if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <StrictMode>
     <LocaleProvider>
+      <PushRetractions />
       <BrowserRouter basename="/lite">
         <AppRoot slots={{
           homeSummary: <SessionAwareHomeTriage />,

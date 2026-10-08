@@ -37,7 +37,11 @@ export function createWebPushTransport(keys: VapidKeys, subject: string, send: t
     async send(subscription, payload) {
       if (!validatePushSubscription(subscription)) return { status: 'invalid' };
       try {
-        await send(subscription, JSON.stringify(payload), { vapidDetails: { ...keys, subject }, contentEncoding: 'aes128gcm', TTL: 120, timeout: 10_000 });
+        // Templates are daemon render hints, not extra transcript content to ship or expand past 4 KiB.
+        const wire = { version: payload.version, type: payload.type, title: payload.title.slice(0, 120), body: payload.body.slice(0, 500), tag: payload.tag.slice(0, 200), url: payload.url, occurrenceKey: payload.occurrenceKey };
+        const encoded = JSON.stringify(wire);
+        if (Buffer.byteLength(encoded) > 3500) return { status: 'failed', statusCode: 413 };
+        await send(subscription, encoded, { vapidDetails: { ...keys, subject }, contentEncoding: 'aes128gcm', TTL: 120, timeout: 10_000 });
         return { status: 'sent' };
       } catch (error) {
         const statusCode = (error as { statusCode?: number }).statusCode;

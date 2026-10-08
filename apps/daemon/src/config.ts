@@ -35,6 +35,7 @@ export interface DaemonConfig {
   readonly pushSubject?: string;
   /** Dedicated owner-only Markdown storage; injected fixtures may supply their own store. */
   readonly memoryPath?: string;
+
   /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
   readonly herdrSocketPath: string;
   /** Owner-only local unlock state, never inside Collie or the repository. */
