@@ -8,14 +8,22 @@ export interface StoredPushSubscription {
   readonly keys: { readonly p256dh: string; readonly auth: string };
   readonly owner: string;
 }
+export interface PendingPushOccurrence {
+  readonly binding: string;
+  readonly identity: string;
+  readonly occurrenceKey: string;
+  readonly active: boolean;
+}
 export interface PushState {
   readonly version: 1;
   readonly subscriptions: readonly StoredPushSubscription[];
   readonly preferences: { readonly enabled: boolean };
   /** Claims are persisted before dispatch: uncertain in-flight sends are not replayed. */
   readonly deliveries: Readonly<Record<string, number>>;
+  readonly pendingOccurrences: Readonly<Record<string, PendingPushOccurrence>>;
+  readonly activityCursor: number;
 }
-export const emptyPushState = (): PushState => ({ version: 1, subscriptions: [], preferences: { enabled: true }, deliveries: {} });
+export const emptyPushState = (): PushState => ({ version: 1, subscriptions: [], preferences: { enabled: true }, deliveries: {}, pendingOccurrences: {}, activityCursor: 0 });
 export interface PushPersistence {
   load(): Promise<PushState>;
   mutate<T>(change: (state: PushState) => { next: PushState; result: T }, admission: MutationAdmission): Promise<T>;
