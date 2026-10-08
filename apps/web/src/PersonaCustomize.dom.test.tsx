@@ -45,7 +45,7 @@ async function click(text: string) {
 test("locked customization keeps its draft and does not write, unlocking never automatically saves", async () => {
   let writes = 0;
   globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
-    if (init?.method === "PATCH") { writes++; return Response.json({ error: "locked" }, { status: 423 }); }
+    if (init?.method === "PATCH") { writes++; return Response.json({ error: "locked", executed: false, deliveryUnknown: false }, { status: 423 }); }
     return Response.json({ personas: [initial] });
   }) as typeof fetch;
   await mount(); await change('input[name="name"]', "Nova");
@@ -59,6 +59,47 @@ test("locked customization keeps its draft and does not write, unlocking never a
   await save();
   expect(writes).toBe(1);
   expect(container.textContent).toContain("not dispatched");
+});
+
+test("a pending save blocks remounted forms, and interrupted 423 remains unknown after unlock", async () => {
+  let writes = 0;
+  let finish!: (response: Response) => void;
+  let current = initial;
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PATCH") { writes++; current = { ...current, ...JSON.parse(String(init.body)) }; return new Promise<Response>((resolve) => { finish = resolve; }); }
+    return Response.json({ personas: [initial] });
+  }) as typeof fetch;
+  await mount(); await change('input[name="name"]', "Nova"); await save();
+  await act(() => root.unmount()); container.remove(); await mount();
+  await save();
+  expect(writes).toBe(1);
+  await act(async () => finish(Response.json({ code: "session.interrupted", executed: true, deliveryUnknown: true }, { status: 423 })));
+  expect(container.textContent).toContain("outcome unknown");
+  await act(async () => { sessionState.apply({ locked: false, epoch: 2, generation: "customize-fixture" }); sessionState.caughtUp(); });
+  await save();
+  expect(writes).toBe(1);
+  expect(container.textContent).not.toContain("not dispatched");
+  globalThis.fetch = (async () => Response.json({ personas: [current] })) as unknown as typeof fetch;
+  await click("Check saved customization");
+  expect(container.textContent).toContain("confirmed from the daemon");
+});
+
+test("an old initialization read cannot overwrite a save confirmed after navigation", async () => {
+  let reads = 0;
+  let finishSave!: (response: Response) => void;
+  let finishRead!: (response: Response) => void;
+  let current = initial;
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PATCH") { current = { ...current, ...JSON.parse(String(init.body)) }; return new Promise<Response>((resolve) => { finishSave = resolve; }); }
+    if (++reads === 4) return new Promise<Response>((resolve) => { finishRead = resolve; });
+    return Response.json({ personas: [initial] });
+  }) as typeof fetch;
+  await mount(); await change('input[name="name"]', "Nova"); await save();
+  await act(() => root.unmount()); container.remove(); await mount();
+  await act(async () => finishSave(Response.json({ persona: current })));
+  expect((container.querySelector('input[name="name"]') as HTMLInputElement).value).toBe("Nova");
+  await act(async () => finishRead(Response.json({ personas: [initial] })));
+  expect((container.querySelector('input[name="name"]') as HTMLInputElement).value).toBe("Nova");
 });
 
 test("uncertain save survives navigation and lock, only read confirmation clears it without replay", async () => {

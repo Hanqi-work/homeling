@@ -486,6 +486,18 @@ function PaneConversation({ paneId, personaId, persona, personaStale = false }: 
   );
 }
 
+async function fetchPersonaStatus(signal: AbortSignal) {
+  const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+  if (bounded.aborted) throw bounded.reason;
+  let expire!: () => void;
+  const deadline = new Promise<never>((_, reject) => { expire = () => reject(bounded.reason); });
+  bounded.addEventListener("abort", expire, { once: true });
+  try {
+    // Race the read itself: a transport ignoring abort must not retain stale thinking.
+    return await Promise.race([fetchPersonas(bounded), deadline]);
+  } finally { bounded.removeEventListener("abort", expire); }
+}
+
 export function ConversationPage(): ReactElement {
   const { paneId: routePaneId, personaId } = useParams();
   const routePaneIdValue = routePaneId ?? "";
@@ -500,7 +512,7 @@ export function ConversationPage(): ReactElement {
     }
     const session = startAbortableSerialPolling(async (signal) => {
       try {
-        const result = await fetchPersonas(signal);
+        const result = await fetchPersonaStatus(signal);
         if (signal.aborted) return;
         const current = result.personas.find((item) => item.id === personaId);
         setPersona(current ?? null);

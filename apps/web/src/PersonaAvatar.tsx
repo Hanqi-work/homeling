@@ -13,7 +13,7 @@ const sizes = { card: "size-14", detail: "size-28", conversation: "size-10" };
 export function PersonaAvatar({ avatar, size = "card", persona, stale = false }: PersonaAvatarProps) {
   const character = avatar.character ?? "smile";
   const pet = avatar.pet ?? "none";
-  const thinking = !stale && persona?.status === "thinking" && persona.statusSource !== "missing" && persona.statusSource !== "pane" && !persona.paused && !persona.needsAttention;
+  const thinking = !stale && persona?.status === "thinking" && persona.statusSource === "agent" && !persona.paused && !persona.needsAttention;
   return <span className="relative inline-flex shrink-0 items-center justify-center">
     <span aria-hidden="true" data-character={character} data-pet={pet} className={`relative inline-flex items-center justify-center rounded-[45%] ring-1 ring-white/15 ${sizes[size]} ${thinking ? "persona-thinking-orb" : ""}`} style={{ backgroundColor: avatar.color }}>
       <svg viewBox="0 0 64 64" className="h-3/4 w-3/4" fill="none" stroke="#171717" strokeLinecap="round">

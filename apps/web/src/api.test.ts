@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
+import { PersonaAppearanceError, updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
 
 import { sessionState } from "./session-state.ts";
 beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "api-fixture" }); sessionState.caughtUp(); });
@@ -20,6 +20,16 @@ test("customization sends only name/avatar PATCH and locked sessions dispatch no
   sessionState.lock();
   await expect(updatePersonaAppearance("mira/one", patch)).rejects.toThrow("Unlock");
   expect(writes).toBe(1);
+});
+
+test("customization distinguishes pre-dispatch lock from an interrupted or malformed 423", async () => {
+  const patch = { name: "Nova", avatar: { color: "#93c5fd" } };
+  for (const [body, notDispatched] of [[{ executed: false, deliveryUnknown: false }, true], [{ executed: true, deliveryUnknown: true }, false], [{}, false]] as const) {
+    sessionState.apply({ locked: false, epoch: 2, generation: "api-fixture" }); sessionState.caughtUp();
+    globalThis.fetch = (async () => Response.json({ code: "session.locked", ...body }, { status: 423 })) as unknown as typeof fetch;
+    try { await updatePersonaAppearance("mira", patch); throw new Error("expected failure"); }
+    catch (error) { expect(error).toBeInstanceOf(PersonaAppearanceError); expect((error as PersonaAppearanceError).notDispatched).toBe(notDispatched); }
+  }
 });
 
 describe("control key API", () => {

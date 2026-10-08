@@ -47,9 +47,13 @@ function safeId(id: string): boolean {
 function statusOf(persona: Persona, snapshot: HerdrSnapshot): Pick<import("@homeling/contracts").PersonaView, "status" | "statusSource"> {
   if (!snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId)) return { status: "idle", statusSource: "missing" };
   const status = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId)?.agent_status;
-  const mapped = { blocked: "blocked", working: "thinking", idle: "idle", done: "idle" } as const;
-  const known = status && Object.hasOwn(mapped, status) ? mapped[status as keyof typeof mapped] : undefined;
-  return { status: persona.paused ? "idle" : known ?? "active", statusSource: known ? "agent" : "pane" };
+  switch (status) {
+    case "blocked": return { status: persona.paused ? "idle" : "blocked", statusSource: "agent" };
+    case "working": return { status: persona.paused ? "idle" : "thinking", statusSource: "agent" };
+    case "idle":
+    case "done": return { status: "idle", statusSource: "agent" };
+    default: return { status: persona.paused ? "idle" : "active", statusSource: "pane" };
+  }
 }
 
 export async function getLaunchers(cfg: DaemonConfig, fetcher: BridgeFetch, login?: string | null): Promise<LauncherList> {

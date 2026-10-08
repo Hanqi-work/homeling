@@ -8,8 +8,19 @@ const control = "min-h-12 rounded-xl border border-neutral-700 bg-neutral-950 px
 const palette = ["#86efac", "#fda4af", "#93c5fd", "#c4b5fd", "#fcd34d"];
 const characters = [["smile", "Smile"], ["curious", "Curious"], ["sleepy", "Sleepy"]] as const;
 const pets = [["none", "No pet"], ["cat", "Cat"], ["dog", "Dog"]] as const;
-// Keep an uncertain save visible across navigation. Reads may confirm it, never replay it.
-const uncertainSaves = new Map<string, PersonaAppearancePatch>();
+interface SaveAttempt { readonly state: "pending" | "unknown"; readonly patch: PersonaAppearancePatch }
+// Navigation cannot detach pending/unknown writes from their persona.
+const saveAttempts = new Map<string, SaveAttempt>();
+const saveListeners = new Set<(id: string, attempt: SaveAttempt | undefined, saved?: PersonaRecord) => void>();
+function publishAttempt(id: string, attempt: SaveAttempt | undefined, saved?: PersonaRecord) {
+  if (attempt) saveAttempts.set(id, attempt); else saveAttempts.delete(id);
+  for (const listener of saveListeners) listener(id, attempt, saved);
+}
+function matchesAppearance(record: PersonaRecord, patch: PersonaAppearancePatch): boolean {
+  return record.name === patch.name && record.avatar.color === patch.avatar.color
+    && (record.avatar.character ?? "smile") === (patch.avatar.character ?? "smile")
+    && (record.avatar.pet ?? "none") === (patch.avatar.pet ?? "none");
+}
 
 export function PersonaCustomize({ personaId }: { personaId: string }) {
   return <CustomizeForm key={personaId} personaId={personaId} />;
@@ -21,42 +32,58 @@ function CustomizeForm({ personaId }: { personaId: string }) {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<Avatar>({ color: "#86efac", character: "smile", pet: "none" });
   const [busy, setBusy] = useState(false);
-  const [unknown, setUnknown] = useState(() => uncertainSaves.has(personaId));
-  const [error, setError] = useState<string | null>(() => uncertainSaves.has(personaId) ? "Previous save outcome unknown. Check saved customization; it will not be retried automatically." : null);
+  const [attempt, setAttempt] = useState(() => saveAttempts.get(personaId));
+  const unknown = attempt?.state === "unknown";
+  const pending = attempt?.state === "pending";
+  const [error, setError] = useState<string | null>(() => saveAttempts.get(personaId)?.state === "unknown" ? "Previous save outcome unknown. Check saved customization; it will not be retried automatically." : null);
   const [notice, setNotice] = useState<string | null>(null);
   const mounted = useRef(false);
   const inFlight = useRef(false);
   function apply(record: PersonaRecord) {
-    setPersona(record); setName(record.name);
+    setPersona(record);
+    setName(record.name);
     setAvatar({ ...record.avatar, character: record.avatar.character ?? "smile", pet: record.avatar.pet ?? "none" });
   }
   useEffect(() => {
     mounted.current = true;
+    let initializationSuperseded = false;
+    const listener = (id: string, next: SaveAttempt | undefined, saved?: PersonaRecord) => {
+      if (id !== personaId) return;
+      setAttempt(next);
+      if (next?.state === "unknown") setError("Save outcome unknown. Check saved customization before retrying; no automatic retry will run.");
+      if (saved) { initializationSuperseded = true; apply(saved); setError(null); setNotice("Saved. Your avatar and name are shared across Homelings, details and conversation."); }
+    };
+    saveListeners.add(listener);
+    setAttempt(saveAttempts.get(personaId));
     const ctrl = new AbortController();
     void fetchPersonas(AbortSignal.any([ctrl.signal, AbortSignal.timeout(10_000)])).then((result) => {
-      if (ctrl.signal.aborted) return;
+      if (ctrl.signal.aborted || initializationSuperseded) return;
       const current = result.personas.find((item) => item.id === personaId);
       if (current) apply(current); else setError("Persona not found. Return to Homelings.");
-    }).catch((error: unknown) => { if (!ctrl.signal.aborted) setError(`Customization unavailable: ${error instanceof Error ? error.message : "connection lost"}. Return to the persona and try again.`); });
-    return () => { mounted.current = false; ctrl.abort(); };
+    }).catch((error: unknown) => { if (!ctrl.signal.aborted && !initializationSuperseded) setError(`Customization unavailable: ${error instanceof Error ? error.message : "connection lost"}. Return to the persona and try again.`); });
+    return () => { mounted.current = false; saveListeners.delete(listener); ctrl.abort(); };
   }, [personaId]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!persona || inFlight.current || unknown || !name.trim()) return;
-    inFlight.current = true; setBusy(true); setError(null); setNotice(null);
+    if (!persona || inFlight.current || saveAttempts.has(personaId) || !name.trim()) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
     const patch = { name: name.trim(), avatar };
+    publishAttempt(personaId, { state: "pending", patch });
     try {
       const saved = await updatePersonaAppearance(personaId, patch);
-      if (mounted.current) { apply(saved); setNotice("Saved. Your avatar and name are shared across Homelings, details and conversation."); }
+      publishAttempt(personaId, undefined, saved);
     } catch (error) {
       const notDispatched = error instanceof PersonaAppearanceError && error.notDispatched;
-      if (!notDispatched) uncertainSaves.set(personaId, patch);
-      if (mounted.current) {
-        setUnknown(!notDispatched);
-        setError(notDispatched ? `${error.message}. This attempt was not dispatched; unlock or correct the input before explicitly saving again.` : "Save outcome unknown. Check saved customization before retrying; no automatic retry will run.");
-      }
-    } finally { inFlight.current = false; if (mounted.current) setBusy(false); }
+      publishAttempt(personaId, notDispatched ? undefined : { state: "unknown", patch });
+      if (mounted.current && notDispatched) setError(`${error.message}. This attempt was not dispatched; unlock or correct the input before explicitly saving again.`);
+    } finally {
+      inFlight.current = false;
+      if (mounted.current) setBusy(false);
+    }
   }
 
   async function checkSaved() {
@@ -65,17 +92,18 @@ function CustomizeForm({ personaId }: { personaId: string }) {
     try {
       const result = await fetchPersonas(AbortSignal.timeout(10_000));
       const current = result.personas.find((item) => item.id === personaId);
-      const expected = uncertainSaves.get(personaId);
+      const expected = saveAttempts.get(personaId);
       if (!mounted.current) return;
-      if (current && expected && current.name === expected.name && current.avatar.color === expected.avatar.color && (current.avatar.character ?? "smile") === (expected.avatar.character ?? "smile") && (current.avatar.pet ?? "none") === (expected.avatar.pet ?? "none")) {
-        uncertainSaves.delete(personaId); setUnknown(false); setError(null); apply(current); setNotice("Saved customization confirmed from the daemon.");
+      if (current && expected?.state === "unknown" && matchesAppearance(current, expected.patch)) {
+        publishAttempt(personaId, undefined, current);
+        setNotice("Saved customization confirmed from the daemon.");
       } else setError("Previous save is still unconfirmed. The daemon does not yet show those changes. Do not repeat the save; check again after the connection recovers.");
     } catch { if (mounted.current) setError("Unable to check saved customization. Previous save remains unknown; check again when connected."); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
 
   if (!persona) return <p role={error ? "alert" : "status"}>{error ?? "Loading customization…"}</p>;
-  const disabled = busy || unknown || !session.ready;
+  const disabled = busy || pending || unknown || !session.ready;
   return <form onSubmit={save} aria-label="Customize avatar" className="space-y-7">
     <div className="flex flex-col items-center gap-4 py-3"><PersonaAvatar avatar={avatar} size="detail" /><p className="max-w-full truncate text-xl font-medium">{name || persona.name}</p></div>
     <fieldset disabled={disabled} className="space-y-7">
@@ -98,6 +126,6 @@ function CustomizeForm({ personaId }: { personaId: string }) {
     {!session.ready ? <p role="status" className="text-sm text-amber-200">Unlock Homeling before saving. Your draft is preserved.</p> : null}
     {notice ? <p role="status" className="text-sm text-green-200">{notice}</p> : null}
     {error ? <p role="alert" className="text-sm leading-relaxed text-rose-300">{error}</p> : null}
-    {unknown ? <button type="button" disabled={busy} onClick={() => void checkSaved()} className={`${control} w-full`}>{busy ? "Checking…" : "Check saved customization"}</button> : <button type="submit" disabled={disabled || !name.trim()} className="min-h-12 w-full rounded-xl bg-green-300 px-4 py-3 font-semibold text-green-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-200 disabled:opacity-50">{busy ? "Saving…" : "Save changes"}</button>}
+    {unknown ? <button type="button" disabled={busy} onClick={() => void checkSaved()} className={`${control} w-full`}>{busy ? "Checking…" : "Check saved customization"}</button> : <button type="submit" disabled={disabled || !name.trim()} className="min-h-12 w-full rounded-xl bg-green-300 px-4 py-3 font-semibold text-green-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-200 disabled:opacity-50">{busy || pending ? "Saving…" : "Save changes"}</button>}
   </form>;
 }

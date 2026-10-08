@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handleRequest } from "./index.ts";
+import { handleUnlockedRequest as handleRequest } from "./session-test-fixture.ts";
 import type { DaemonConfig } from "./config.ts";
 
 const host = "homeling.tail.test";
