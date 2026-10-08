@@ -11,7 +11,8 @@
 #   2. `bin/collie` mtime + sha256 are unchanged (the binary was not rebuilt/replaced).
 #   3. `tailscale serve` root handler `/` still proxies to :8787 (never rewritten).
 #
-# Optional 4th invariant (daemon restart smoke) runs only with HOMELING_CANARY_DAEMON_URL set.
+# Optional health request runs only with HOMELING_CANARY_DAEMON_URL set.
+# This script does not restart the daemon or verify that a restart occurred.
 set -uo pipefail
 
 COLLIE_DIR="${COLLIE_DIR:-$HOME/.local/share/collie}"

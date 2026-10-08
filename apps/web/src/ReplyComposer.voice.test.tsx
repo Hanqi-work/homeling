@@ -1,19 +1,21 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import type { AudioRecorder, VoiceInputDependencies } from "./voice-input.ts";
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
 let root: Root;
+let createRoot: typeof import("react-dom/client").createRoot;
 let container: HTMLElement;
-beforeAll(() => {
+beforeAll(async () => {
   for (const [key, value] of Object.entries({ window, document: window.document, navigator: window.navigator, IS_REACT_ACT_ENVIRONMENT: true })) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
+  ({ createRoot } = await import("react-dom/client"));
 });
 afterEach(async () => { if (root) await act(() => root.unmount()); container?.remove(); });
 afterAll(() => {
@@ -91,7 +93,11 @@ describe("voice draft composer", () => {
     await act(async () => f.finish("请继续"));
     expect(container.querySelector("textarea")!.value).toBe("原草稿\n请继续");
     expect(ui.sends).toEqual([]);
-    await ui.edit("编辑后的转写");
+    await act(async () => {
+      const textarea = container.querySelector("textarea")!;
+      Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "编辑后的转写");
+      textarea.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event);
+    });
     await click("Send");
     expect(ui.sends).toEqual(["编辑后的转写"]);
   });
