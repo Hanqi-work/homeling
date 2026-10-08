@@ -60,13 +60,20 @@ export interface PersonaDeleteResult {
   readonly archived: boolean;
 }
 
+export class PersonaDeleteError extends Error {
+  constructor(message: string, readonly notDispatched = false) {
+    super(message);
+    this.name = "PersonaDeleteError";
+  }
+}
+
 export async function deletePersona(personaId: string): Promise<PersonaDeleteResult> {
   const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
     method: "DELETE", headers: { accept: "application/json", "content-type": "application/json" }, body: "{}",
   });
   const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string }) | null;
   if (!response.ok || typeof result?.deleted !== "boolean" || typeof result.archived !== "boolean") {
-    throw new Error(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`);
+    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423);
   }
   return { deleted: result.deleted, archived: result.archived };
 }
@@ -180,6 +187,33 @@ export async function stopPaneTask(paneId: string): Promise<void> {
     // Preserve an HTTP-level error when the bridge is unavailable.
   }
   if (!response.ok || result.ok !== true) throw new Error(result.error ?? `stop ${response.status}`);
+}
+
+export type ControlKeyAction = "interrupt" | "escape";
+export interface ControlKeyResult {
+  outcome: "accepted" | "not-submitted" | "unknown";
+  error?: string;
+}
+
+/** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
+export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string): Promise<ControlKeyResult> {
+  try {
+    const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
+      method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
+    });
+    let value: unknown;
+    try { value = await response.json(); } catch { /* HTTP rejection below is still definite. */ }
+    if (value && typeof value === "object" && "outcome" in value) {
+      const result = value as ControlKeyResult;
+      if ((response.ok && result.outcome === "accepted") || result.outcome === "not-submitted" || result.outcome === "unknown") {
+        return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
+      }
+    }
+    return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
+  } catch {
+    return { outcome: "unknown", error: "Network lost or timed out; do not repeat the key" };
+  }
 }
 
 export class ReplyRequestError extends Error {

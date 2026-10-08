@@ -1,5 +1,5 @@
 import type { PersonaView } from "@homeling/contracts";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router";
 import { createPersona, fetchPaneHistory, fetchPersonas } from "./api.ts";
 import { startSerialPolling } from "./polling.ts";
@@ -27,16 +27,23 @@ function NewPersona() {
   const [color, setColor] = useState("#86efac");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const creatingRef = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim() || creating) return;
+    if (!name.trim() || creatingRef.current) return;
+    creatingRef.current = true;
     setCreating(true); setError(null);
     try {
       const persona = await createPersona({ name: name.trim(), avatar: { color } });
-      navigate(`/persona/${encodeURIComponent(persona.id)}`);
+      if (mounted.current) navigate(`/persona/${encodeURIComponent(persona.id)}`);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Creation failed; check your Homelings before retrying.");
-    } finally { setCreating(false); }
+      if (mounted.current) setError(error instanceof Error ? error.message : "Creation failed; check your Homelings before retrying.");
+    } finally {
+      creatingRef.current = false;
+      if (mounted.current) setCreating(false);
+    }
   }
   return <section>
     <h1 className="mb-2 text-3xl font-semibold tracking-tight">A new Homeling</h1>

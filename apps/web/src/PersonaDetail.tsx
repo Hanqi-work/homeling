@@ -1,7 +1,7 @@
 import type { PersonaView } from "@homeling/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { deletePersona, fetchPersonas } from "./api.ts";
+import { deletePersona, fetchPersonas, PersonaDeleteError } from "./api.ts";
 import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { personaStatusLabel } from "./persona-home.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
@@ -9,31 +9,48 @@ import type { PersonaShellSlots } from "./shell-slots.ts";
 
 const action = "flex min-h-12 items-center justify-between rounded-xl border border-neutral-800 px-4 py-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300";
 
-export function PersonaDetailContent({ persona, onDeleted }: { persona: PersonaView; onDeleted?: () => void }) {
+interface PersonaDetailContentProps {
+  persona: PersonaView;
+  onDeleteStarted?: () => void;
+}
+
+interface PersonaDetailProps {
+  slots?: PersonaShellSlots;
+  entry?: "details" | "memory" | "activity" | "customize";
+}
+
+export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetailContentProps): ReactElement {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removed, setRemoved] = useState(false);
   const inFlight = useRef(false);
-  async function remove() {
+  const deletionUnknown = useRef(false);
+  async function remove(): Promise<void> {
     if (inFlight.current) return;
-    inFlight.current = true; setDeleting(true); setError(null);
+    inFlight.current = true; setDeleting(true);
+    if (!deletionUnknown.current) setError(null);
+    onDeleteStarted?.();
     try {
       const outcome = await deletePersona(persona.id);
       if (!outcome.deleted) { setError("Persona was not deleted. Check its current state before retrying."); return; }
-      onDeleted?.();
       setRemoved(true); setConfirming(false);
       setResult(outcome.archived
         ? "Homeling deleted. Main pane closed; space archived and task panes retained."
         : "Homeling deleted and main pane closed. Space and tasks are retained, but the archive rename failed. Check the retained space on this computer.");
     } catch (error) {
-      setError(`${error instanceof Error ? error.message : "Deletion failed"}. Deletion may have partially completed; check Homelings and the main pane before retrying.`);
+      if (error instanceof PersonaDeleteError && error.notDispatched) {
+        setError(`Session locked. This deletion attempt was not dispatched. Unlock before explicitly retrying.${deletionUnknown.current ? " The previous deletion remains unconfirmed and may have partially completed; check Homelings and the main pane before retrying." : ""}`);
+      } else {
+        deletionUnknown.current = true;
+        setError(`${error instanceof Error ? error.message : "Deletion failed"}. Deletion may have partially completed; check Homelings and the main pane before retrying.`);
+      }
     } finally { inFlight.current = false; setDeleting(false); }
   }
   const base = `/persona/${encodeURIComponent(persona.id)}`;
   return <section>
-    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? "Deleted" : personaStatusLabel(persona)}</p></div>
+    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? "Deleted" : deleting ? "Deleting…" : error ? "Deletion needs checking" : personaStatusLabel(persona)}</p></div>
     {result ? <p role="status" className="mb-5 rounded-xl border border-amber-800 p-4 text-sm text-amber-200">{result}</p> : null}
     {!removed ? <>
       <h2 className="mb-3 text-sm font-medium text-neutral-400">Computers</h2>
@@ -50,24 +67,29 @@ export function PersonaDetailContent({ persona, onDeleted }: { persona: PersonaV
   </section>;
 }
 
-export function PersonaDetail({ slots = {}, entry = "details" }: { slots?: PersonaShellSlots; entry?: "details" | "memory" | "activity" | "customize" }) {
+export function PersonaDetail(props: PersonaDetailProps): ReactElement {
+  const { personaId = "" } = useParams();
+  return <PersonaDetailView key={`${personaId}:${props.entry ?? "details"}`} {...props} />;
+}
+
+function PersonaDetailView({ slots = {}, entry = "details" }: PersonaDetailProps): ReactElement {
   const { personaId = "" } = useParams();
   const navigate = useNavigate();
   const dialog = useRef<HTMLDialogElement>(null);
-  const deleted = useRef(false);
+  const deletionScope = useRef<string | null>(null);
   const [persona, setPersona] = useState<PersonaView | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    deleted.current = false;
     const session = startAbortableSerialPolling(async (signal) => {
-      if (deleted.current) return;
+      if (deletionScope.current === personaId) return;
       try {
         const result = await fetchPersonas(AbortSignal.any([signal, AbortSignal.timeout(10_000)]));
-        if (signal.aborted || deleted.current) return;
-        setPersona(result.personas.find((item) => item.id === personaId) ?? null);
-        setError(result.personas.some((item) => item.id === personaId) ? null : "Persona not found or already deleted");
+        if (signal.aborted || deletionScope.current === personaId) return;
+        const matchingPersona = result.personas.find((item) => item.id === personaId) ?? null;
+        setPersona(matchingPersona);
+        setError(matchingPersona ? null : "Persona not found or already deleted");
       } catch (error) {
-        if (!signal.aborted && !deleted.current) setError(error instanceof Error ? error.message : "Persona unavailable");
+        if (!signal.aborted && deletionScope.current !== personaId) setError(error instanceof Error ? error.message : "Persona unavailable");
       }
     }, 3000);
     return () => session.stop();
@@ -79,11 +101,25 @@ export function PersonaDetail({ slots = {}, entry = "details" }: { slots?: Perso
     if (!element.open) element.showModal();
     return () => { element.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, [entry]);
-  const close = () => navigate("/");
+  function close(): void {
+    navigate("/");
+  }
+
+  let body: ReactNode = null;
+  if (persona && persona.id === personaId && !error) {
+    if (entry === "details") {
+      body = <PersonaDetailContent key={persona.id} persona={persona} onDeleteStarted={() => { deletionScope.current = persona.id; }} />;
+    } else {
+      body = <section><h1 className="mb-6 text-2xl font-semibold">{persona.name} · {entry}</h1>{slots[entry]?.(persona.id) ?? <p className="text-neutral-400">This feature is not enabled yet.</p>}</section>;
+    }
+  } else if (!error) {
+    body = <p role="status">Loading persona…</p>;
+  }
+
   const content = <>
     <Link to={entry === "details" ? "/" : `/persona/${encodeURIComponent(personaId)}/details`} className="mb-6 inline-block min-h-12 py-3 text-sm text-green-200">{entry === "details" ? "Close panel" : "Back to persona"}</Link>
     {error ? <p role="alert" className="mb-4 text-sm text-rose-300">{error}</p> : null}
-    {persona && persona.id === personaId && !error ? entry === "details" ? <PersonaDetailContent key={persona.id} persona={persona} onDeleted={() => { deleted.current = true; }} /> : <section><h1 className="mb-6 text-2xl font-semibold">{persona.name} · {entry}</h1>{slots[entry]?.(persona.id) ?? <p className="text-neutral-400">This feature is not enabled yet.</p>}</section> : !error ? <p role="status">Loading persona…</p> : null}
+    {body}
   </>;
   if (entry !== "details") return content;
   return <dialog ref={dialog} aria-label="Persona details" onCancel={(event) => { event.preventDefault(); close(); }} onClick={(event) => { if (event.target === event.currentTarget) close(); }} className="fixed inset-0 m-0 ml-auto h-dvh max-h-dvh w-full max-w-lg overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-6 text-neutral-100 backdrop:bg-black/60"><div>{content}</div></dialog>;

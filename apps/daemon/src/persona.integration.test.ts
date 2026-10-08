@@ -180,6 +180,31 @@ function request(path: string, options: { method?: string; body?: string; conten
 }
 
 describe("persona creation loop over an in-memory Herdr socket", () => {
+  test("persona message routing cannot bypass an unknown cancellation on its latest main pane", async () => {
+    const { cfg, deliveries, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }),
+    }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string; mainPaneId: string } };
+    const controlFetcher: BridgeFetch = async (input, init) => {
+      if (init?.method === "POST") throw new Error("cancellation result lost");
+      if (String(input).endsWith("/snapshot")) return Response.json({ bridge: "connected", agents: [{
+        paneId: persona.mainPaneId, workspaceId: "w1", tabId: "w1:t1", agent: "claude", cwd: "/home/test", sessionName: "s", status: "working",
+      }], shellPanes: [] });
+      return Response.json({ paneId: persona.mainPaneId, text: "Working on task", truncated: false });
+    };
+    const key = await handleRequest(request(`/lite/api/pane/${encodeURIComponent(persona.mainPaneId)}/control-key`, {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ action: "interrupt", confirmed: true,
+        identity: JSON.stringify([persona.mainPaneId, "w1", "w1:t1", "claude", "/home/test", "s", null, null]) }),
+    }), cfg, controlFetcher, runtime);
+    expect(await key.json()).toMatchObject({ outcome: "unknown" });
+    const message = await handleRequest(request(`/lite/api/persona/${persona.id}/message`, {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ text: "new instruction" }),
+    }), cfg, fetcher, runtime);
+    expect(message.status).toBe(409);
+    expect(await message.json()).toMatchObject({ textDelivered: false });
+    expect(deliveries).toHaveLength(0);
+  });
   test("creates, messages, launches owned tasks, lists status, and restores a missing main pane", async () => {
     const { cfg, state, deliveries, bridgeCalls, fetcher, runtime } = await fixture();
     const body = JSON.stringify({ name: "Mira", avatar: { color: "#86efac" }, systemPrompt: "Be concise." });
