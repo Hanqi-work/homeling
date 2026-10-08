@@ -1,4 +1,4 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { ActivityResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
@@ -42,6 +42,10 @@ export function fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
 
 export function fetchPersonas(signal?: AbortSignal): Promise<PersonaListResponse> {
   return getJson("persona/list", signal);
+}
+
+export function fetchPersonaActivity(personaId: string, signal?: AbortSignal): Promise<ActivityResponse> {
+  return getJson(`persona/${encodeURIComponent(personaId)}/activity`, signal);
 }
 
 export async function createPersona(input: { name: string; avatar: { color: string }; systemPrompt?: string }): Promise<PersonaView> {

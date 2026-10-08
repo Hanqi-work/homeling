@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { handleRequest } from "./index.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 import { daemonConfigFromEnv } from "./config.ts";
+import { PersonaRegistry } from './persona-registry.ts';
+import { HerdrSocketClient } from './herdr-client.ts';
 
 const permissionScreen = `Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend`;
 
@@ -41,12 +43,17 @@ describe("pending request daemon routes", () => {
     expect(forwardedLogins).toEqual(["me@github.com", "me@github.com"]);
     const requests = await response.json() as Array<Record<string, unknown>>;
     expect(requests[0]).toMatchObject({
-      paneId: "w1:p1", personaId: "w1", kind: "prompt-select", status: "pending",
+      paneId: "w1:p1", kind: "prompt-select", status: "pending",
       payload: { question: "Do you want to proceed?" },
     });
     const firstOption = (requests[0]?.payload as { options: Array<Record<string, unknown>> }).options[0]!;
     expect(firstOption).toMatchObject({ id: "1", label: "Yes" });
     expect(firstOption).not.toHaveProperty("keys");
+    expect(requests[0]).not.toHaveProperty("personaId"); // Legacy space is not a registered persona.
+    const config = cfg();
+    const registry = new PersonaRegistry('/unused/registry.json', async () => JSON.stringify({ version: 1, personas: [{ id: 'persona-actual', spaceId: 'w1', mainPaneId: 'w1:p1', name: 'Work', avatar: { color: '#86efac' }, launcherCommand: 'claude', createdAt: '2026-10-09T00:00:00Z', paused: false, systemPromptInjected: false }], archivedSpaces: [], orphans: [] }));
+    const mapped = await handleRequest(request('/lite/api/requests'), config, fetcher, { cfg: config, fetcher, registry, herdr: new HerdrSocketClient({ socketPath: '/unused/herdr.sock' }) });
+    expect((await mapped.json())[0].personaId).toBe('persona-actual');
   });
 
   test("approval rejects cross-origin and non-JSON calls before bridge writes", async () => {

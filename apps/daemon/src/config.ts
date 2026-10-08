@@ -27,6 +27,12 @@ export interface DaemonConfig {
   readonly bridgeOrigin: string;
   /** Persistent daemon-owned persona registry. */
   readonly registryPath: string;
+  /** Persistent task ownership and observation history; defaults alongside the registry. */
+  readonly activityPath?: string;
+  /** External independent push state/VAPID directory. */
+  readonly pushDataDir?: string;
+  /** Required VAPID contact; unset disables push without touching Collie. */
+  readonly pushSubject?: string;
   /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
   readonly herdrSocketPath: string;
 }
@@ -82,6 +88,9 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     tailscaleHost,
     allowAnyHost,
     bridgeOrigin,
+    activityPath: env.HOMELING_ACTIVITY_PATH ?? process.env.HOMELING_ACTIVITY_PATH,
+    pushDataDir: env.HOMELING_PUSH_DIR ?? process.env.HOMELING_PUSH_DIR ?? join(homedir(), 'Library', 'Application Support', 'Homeling', 'push'),
+    pushSubject: env.HOMELING_PUSH_SUBJECT ?? process.env.HOMELING_PUSH_SUBJECT,
     registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
     herdrSocketPath: env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock"),
   };

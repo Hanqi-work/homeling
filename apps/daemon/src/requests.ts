@@ -259,7 +259,7 @@ export class PendingRequestStore {
     return generation === this.collectionGeneration;
   }
 
-  observe(pane: PaneWire, detected: DetectedRequest | null, now = Date.now()): PendingRequest | null {
+  observe(pane: PaneWire, detected: DetectedRequest | null, now = Date.now(), personaId?: string): PendingRequest | null {
     const active = this.activeByPane.get(pane.paneId);
     if (!detected) {
       if (active && this.claimed.has(active.id)) return null;
@@ -296,8 +296,8 @@ export class PendingRequestStore {
     const id = `request:${this.instanceId}:${++this.sequence}`;
     const createdAt = new Date(now).toISOString();
     const options = detected.options.map(({ id, label }) => ({ id, label }));
-    // Collie space/workspace is the persona ownership boundary (GLOSSARY.md).
-    const common = { id, paneId: pane.paneId, personaId: pane.workspaceId, createdAt, status: "pending" as const };
+    // The HTTP collection path supplies the daemon registry identity, not the workspace ID.
+    const common = { id, paneId: pane.paneId, ...(personaId ? { personaId } : {}), createdAt, status: "pending" as const };
     const request: PendingRequest = detected.kind === "preview-select"
       ? { ...common, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
       : { ...common, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
@@ -410,6 +410,7 @@ export async function collectPendingRequests(
   store: PendingRequestStore,
   login: string | null = null,
   now = Date.now(),
+  resolvePersona?: (pane: PaneWire) => Promise<string | undefined>,
 ): Promise<PendingRequest[]> {
   const generation = store.beginCollection();
   const snapshot = await upstreamJson<SnapshotResponse>(proxyTargetUrl("/lite/api/snapshot", cfg), fetcher, login);
@@ -431,7 +432,11 @@ export async function collectPendingRequests(
         continue;
       }
       const detected = detectPendingRequest(read.text);
-      if (detected) store.observe(pane, detected, now);
+      if (detected) {
+        const personaId = resolvePersona ? await resolvePersona(pane) : undefined;
+        if (!store.isCurrentCollection(generation)) return store.listPending(now);
+        store.observe(pane, detected, now, personaId);
+      }
       else store.expirePaneRequest(pane.paneId);
     } catch {
       // A transient read failure is not evidence that the approval disappeared.
