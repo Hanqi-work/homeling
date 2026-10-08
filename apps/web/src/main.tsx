@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router";
 import { App } from "./App.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
+import { LocaleProvider } from "./locale.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 
 const ConversationPage = lazy(() => import("./ConversationPage.tsx").then((module) => ({ default: module.ConversationPage })));
@@ -21,6 +22,7 @@ if (!root) throw new Error("missing #root");
 
 createRoot(root).render(
   <StrictMode>
+    <LocaleProvider>
     <BrowserRouter basename="/lite">
       <Routes>
         <Route path="/p/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
@@ -30,5 +32,6 @@ createRoot(root).render(
         <Route path="*" element={<App slots={{ memory: (personaId) => <PersonaMemoryEditor personaId={personaId} /> }} />} />
       </Routes>
     </BrowserRouter>
+    </LocaleProvider>
   </StrictMode>,
 );
