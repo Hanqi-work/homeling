@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+@keyframes persona-thinking {
+  0%, 100% { transform: scale(1) rotate(-2deg); }
+  50% { transform: scale(1.055) rotate(2deg); }
+}
+.persona-thinking-orb { animation: persona-thinking 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .persona-thinking-orb { animation: none; transform: none; }
+}
+
 body {
   margin: 0;
   background: #1a1a1a;

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { AppRoot } from "./AppRoot.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
+import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { LocaleProvider } from "./locale.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
@@ -17,7 +18,10 @@ createRoot(root).render(
   <StrictMode>
     <LocaleProvider>
       <BrowserRouter basename="/lite">
-        <AppRoot slots={{ memory: (personaId) => <PersonaMemoryEditor personaId={personaId} /> }} />
+        <AppRoot slots={{
+          memory: (personaId) => <PersonaMemoryEditor personaId={personaId} />,
+          customize: (personaId) => <PersonaCustomize personaId={personaId} />,
+        }} />
       </BrowserRouter>
     </LocaleProvider>
   </StrictMode>,

@@ -9,6 +9,8 @@ import type { DaemonConfig } from "./config.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
 import { createEventObserver, deletePersona, recoverPersonas, sendPersonaMessage, type PersonaRuntime } from "./persona-service.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
+import { handleRequest as handleLockedRequest } from "./index.ts";
+import { SessionController } from "./session-controller.ts";
 
 interface MemoryState {
   workspaces: Array<{ workspace_id: string; label: string }>;
@@ -182,6 +184,54 @@ function request(path: string, options: { method?: string; body?: string; conten
 }
 
 describe("persona creation loop over an in-memory Herdr socket", () => {
+  test("direct locked avatar PATCH is not dispatched and changes neither space nor durable persona", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    const response = await handleLockedRequest(request(`/lite/api/persona/${persona.id}`, { method: "PATCH", contentType: "application/json", body: JSON.stringify({ name: "Nova", avatar: { color: "#93c5fd", character: "sleepy", pet: "dog" } }) }), cfg, fetcher, runtime, new SessionController({ verify: () => null }));
+    expect(response.status).toBe(423);
+    expect(await response.json()).toMatchObject({ executed: false, code: "session.locked" });
+    expect(await new PersonaRegistry(cfg.registryPath).get(persona.id)).toMatchObject({ name: "Mira", avatar: { color: "#86efac" } });
+    expect(state.workspaces[0]?.label).toBe("Mira");
+  });
+  test("malformed avatar fields are rejected atomically before rename or persistence", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    for (const invalid of [{ character: 9 }, { pet: null }, { character: "x".repeat(81) }, { pet: {} }, { character: "" }]) {
+      const response = await handleRequest(request(`/lite/api/persona/${persona.id}`, { method: "PATCH", contentType: "application/json", body: JSON.stringify({ name: "Do not rename", avatar: { color: "#93c5fd", ...invalid } }) }), cfg, fetcher, runtime);
+      expect(response.status).toBe(400);
+    }
+    expect((await runtime.registry.get(persona.id))?.name).toBe("Mira");
+    expect(state.workspaces[0]?.label).toBe("Mira");
+  });
+  test("persona state explains missing and unreported panes without fabricating thinking", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher, runtime);
+    expect(created.status).toBe(201);
+    async function read() { return (await (await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime)).json()).personas[0]; }
+    expect(await read()).toMatchObject({ status: "thinking", statusSource: "agent" });
+    state.startedAgents.clear();
+    expect(await read()).toMatchObject({ status: "active", statusSource: "pane" });
+    state.panes = [];
+    expect(await read()).toMatchObject({ status: "idle", statusSource: "missing" });
+  });
+  test("avatar customization and rename survive daemon reload without overwriting a concurrent prompt update", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" }, systemPrompt: "original" }) }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    const avatar = { color: "#93c5fd", character: "curious", pet: "cat" };
+    const [customized, prompt] = await Promise.all([
+      handleRequest(request(`/lite/api/persona/${persona.id}`, { method: "PATCH", contentType: "application/json", body: JSON.stringify({ name: "Nova", avatar }) }), cfg, fetcher, runtime),
+      runtime.registry.patchPersona(persona.id, { systemPrompt: "new memory instructions", systemPromptInjected: true }),
+    ]);
+    expect(customized.status).toBe(200);
+    expect(prompt).toBeDefined();
+    const reloaded = { ...runtime, registry: new PersonaRegistry(cfg.registryPath) };
+    const listed = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, reloaded);
+    expect((await listed.json()).personas[0]).toMatchObject({ name: "Nova", avatar, systemPrompt: "new memory instructions", systemPromptInjected: true });
+    expect(state.workspaces[0]?.label).toBe("Nova");
+  });
   test("persona message routing cannot bypass an unknown cancellation on its latest main pane", async () => {
     const { cfg, deliveries, fetcher, runtime } = await fixture();
     const created = await handleRequest(request("/lite/api/persona", {

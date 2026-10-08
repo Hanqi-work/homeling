@@ -1,4 +1,4 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 import { sessionState } from "./session-state.ts";
 
@@ -62,6 +62,37 @@ export async function createPersona(input: { name: string; avatar: { color: stri
   });
   const result = await response.json().catch(() => null) as { persona?: PersonaView; error?: string } | null;
   if (!response.ok || !result?.persona) throw new Error(result?.error ?? `Create persona failed (${response.status})`);
+  return result.persona;
+}
+
+export interface PersonaAppearancePatch {
+  readonly name: string;
+  readonly avatar: PersonaAvatar;
+}
+
+export class PersonaAppearanceError extends Error {
+  constructor(message: string, readonly notDispatched = false) {
+    super(message);
+    this.name = "PersonaAppearanceError";
+  }
+}
+
+export async function updatePersonaAppearance(personaId: string, patch: PersonaAppearancePatch): Promise<PersonaRecord> {
+  let response: Response;
+  try {
+    response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+      method: "PATCH", headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ name: patch.name, avatar: patch.avatar }),
+    });
+  } catch (error) {
+    if (error instanceof ReplyRequestError && error.textDelivered === false) throw new PersonaAppearanceError(error.message, true);
+    throw new PersonaAppearanceError("Save outcome unknown. Check saved customization before retrying.");
+  }
+  const result = await response.json().catch(() => null) as { persona?: PersonaRecord; error?: string; executed?: boolean; deliveryUnknown?: boolean } | null;
+  if (!response.ok || result?.persona?.id !== personaId) {
+    const notDispatched = result?.executed !== true && result?.deliveryUnknown !== true && ([400, 401, 403, 404, 415].includes(response.status) || (response.status === 423 && result?.executed === false && result.deliveryUnknown === false));
+    throw new PersonaAppearanceError(result?.error ?? `Save could not be confirmed (${response.status}). Check saved customization.`, notDispatched);
+  }
   return result.persona;
 }
 

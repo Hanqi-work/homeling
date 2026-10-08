@@ -36,6 +36,8 @@ export type PersonaStatus = "thinking" | "active" | "idle" | "blocked";
 /** Runtime state is a projection of the latest Herdr snapshot, not persisted registry data. */
 export interface PersonaView extends PersonaRecord {
   readonly status: PersonaStatus;
+  /** Missing pane / unreported agent status are explicit, never fabricated thinking. */
+  readonly statusSource?: "agent" | "pane" | "missing";
 }
 
 export interface PersonaListResponse {

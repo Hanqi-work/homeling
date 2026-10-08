@@ -60,14 +60,16 @@ function safeId(id: string): boolean {
   return /^[A-Za-z0-9._~-]{1,128}$/.test(id);
 }
 
-function statusOf(persona: Persona, snapshot: HerdrSnapshot): "thinking" | "active" | "idle" | "blocked" {
-  if (persona.paused) return "idle";
-  const agent = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId);
-  const status = agent?.agent_status;
-  if (status === "blocked") return "blocked";
-  if (status === "working") return "thinking";
-  if (status === "idle" || status === "done") return "idle";
-  return snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId) ? "active" : "idle";
+function statusOf(persona: Persona, snapshot: HerdrSnapshot): Pick<import("@homeling/contracts").PersonaView, "status" | "statusSource"> {
+  if (!snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId)) return { status: "idle", statusSource: "missing" };
+  const status = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId)?.agent_status;
+  switch (status) {
+    case "blocked": return { status: persona.paused ? "idle" : "blocked", statusSource: "agent" };
+    case "working": return { status: persona.paused ? "idle" : "thinking", statusSource: "agent" };
+    case "idle":
+    case "done": return { status: "idle", statusSource: "agent" };
+    default: return { status: persona.paused ? "idle" : "active", statusSource: "pane" };
+  }
 }
 
 export async function getLaunchers(cfg: DaemonConfig, fetcher: BridgeFetch, login?: string | null): Promise<LauncherList> {
@@ -175,7 +177,7 @@ export async function createPersona(
 
 export async function listPersonas(runtime: PersonaRuntime): Promise<readonly (Persona & { status: string })[]> {
   const [personas, snapshot] = await Promise.all([runtime.registry.list(), runtime.herdr.snapshot()]);
-  return personas.map((persona) => ({ ...persona, status: statusOf(persona, snapshot) }));
+  return personas.map((persona) => ({ ...persona, ...statusOf(persona, snapshot) }));
 }
 
 export function updatePersona(
@@ -476,12 +478,16 @@ export function createEventObserver(runtime: PersonaRuntime, admission: SystemAd
   return { close() { closed = true; clearTimeout(retryTimer); clearInterval(reconcileTimer); stream?.close(); } };
 }
 
+function validAvatarFields(avatar: Record<string, unknown>): boolean {
+  return ["character", "pet"].every((key) => avatar[key] === undefined || (typeof avatar[key] === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(avatar[key])));
+}
+
 export function validatePersonaInput(value: unknown): { name: string; avatar: PersonaAvatar; systemPrompt?: string; launcherCommand?: string } | null {
   if (!value || typeof value !== "object") return null;
   const body = value as Record<string, unknown>;
   if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 80) return null;
   const rawAvatar = body.avatar && typeof body.avatar === "object" ? body.avatar as Record<string, unknown> : {};
-  if (typeof rawAvatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(rawAvatar.color)) return null;
+  if (typeof rawAvatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(rawAvatar.color) || !validAvatarFields(rawAvatar)) return null;
   if (body.systemPrompt !== undefined && (typeof body.systemPrompt !== "string" || body.systemPrompt.length > 20_000)) return null;
   if (body.launcherCommand !== undefined && (typeof body.launcherCommand !== "string" || body.launcherCommand.length > 2_000)) return null;
   return {
@@ -502,8 +508,8 @@ export function validatePersonaPatch(value: unknown): { name?: string; avatar?: 
   }
   if (body.avatar !== undefined) {
     const avatar = body.avatar as Record<string, unknown> | null;
-    if (!avatar || typeof avatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(avatar.color)) return null;
-    patch.avatar = { color: avatar.color };
+    if (!avatar || typeof avatar.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(avatar.color) || !validAvatarFields(avatar)) return null;
+    patch.avatar = { color: avatar.color, ...(typeof avatar.character === "string" ? { character: avatar.character } : {}), ...(typeof avatar.pet === "string" ? { pet: avatar.pet } : {}) };
   }
   if (body.systemPrompt !== undefined) {
     if (typeof body.systemPrompt !== "string" || body.systemPrompt.length > 20_000) return null;
