@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@homeling/contracts": "workspace:*"
+    "@homeling/contracts": "workspace:*",
+    "web-push": "^3.6.7"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/web-push": "^3.6.4"
   }
 }
