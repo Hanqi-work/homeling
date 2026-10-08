@@ -49,6 +49,9 @@ describe("proxyTargetUrl", () => {
     expect(proxyTargetUrl("/lite/api/pane/w1:p2/history?limit=60&before=abc", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w1:p2/history?limit=60&before=abc`,
     );
+    expect(proxyTargetUrl("/lite/api/pane/w5N%3Ap1/history", cfg)).toBe(
+      `${cfg.bridgeOrigin}/api/pane/w5N:p1/history`,
+    );
     expect(proxyTargetUrl("/lite/api/pane/w1:p2/history?before=a%20b&extra=x", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w1:p2/history?before=a%20b&extra=x`,
     );
