@@ -48,7 +48,7 @@ export function PendingRequestCard({ request, onApprove, onSettled }: PendingReq
       onSettled?.({ ...request, status: nextStatus });
     } catch (error) {
       if (error instanceof ReplyRequestError && error.textDelivered === false) {
-        setMessage("已锁定，尚未提交；解锁后请确认再操作");
+        setMessage("permission.lockedNotSubmitted");
         return;
       }
       // The upstream may have accepted a key before the connection failed: never enable a duplicate tap.

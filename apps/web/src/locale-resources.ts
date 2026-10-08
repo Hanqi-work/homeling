@@ -21,6 +21,7 @@ export const messages = {
   "permission.unknown": ["Result unknown; check the agent. Retry disabled", "Ergebnis unklar; Agent prüfen. Erneuter Versuch deaktiviert", "Resultado desconocido; revisa el agente. Reintento desactivado", "결과 불명; 에이전트를 확인하세요. 재시도 비활성화", "結果不明。エージェントを確認してください。再試行不可", "结果不明，请查看 agent；已禁用重试"],
   "permission.resolved": ["Handled", "Erledigt", "Atendido", "처리됨", "処理済み", "已处理"],
   "permission.pending": ["Awaiting action", "Aktion ausstehend", "Esperando acción", "처리 대기", "対応待ち", "等待处理"],
+  "permission.lockedNotSubmitted": ["Locked, not submitted; unlock and confirm before trying again", "Gesperrt, nicht abgesendet; entsperren und vor einem neuen Versuch bestätigen", "Bloqueado, no enviado; desbloquea y confirma antes de reintentar", "잠겨 있어 제출되지 않았습니다. 잠금을 해제하고 확인한 뒤 재시도하세요", "ロック中のため未送信。ロックを解除して確認してから再試行してください", "已锁定，尚未提交；解锁后请确认再操作"],
   "permission.notSubmitted": ["Not submitted; you can retry", "Nicht abgesendet; erneuter Versuch möglich", "No enviado; puedes reintentar", "제출되지 않음; 재시도 가능", "未送信。再試行できます", "尚未提交；可以重试"],
   "permission.previewRequest": ["Preview selection request", "Vorschau-Auswahlanfrage", "Solicitud de selección de vista previa", "미리 보기 선택 요청", "プレビュー選択リクエスト", "预览选择请求"],
   "permission.request": ["Permission or option request", "Berechtigungs- oder Auswahlanfrage", "Solicitud de permiso u opción", "권한 또는 옵션 요청", "権限・選択リクエスト", "权限或选项请求"],

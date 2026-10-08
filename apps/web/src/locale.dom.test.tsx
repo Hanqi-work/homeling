@@ -8,6 +8,8 @@ import { App } from "./App.tsx";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { PersonaDetailContent } from "./PersonaDetail.tsx";
 import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
+import { PendingRequestCard } from "./PendingRequestCard.tsx";
+import { ReplyRequestError } from "./api.ts";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -31,6 +33,21 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("a permission attempt refused before dispatch stays pending and its existing warning re-translates", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  let approvals = 0;
+  const request = { id: "r", paneId: "p", personaId: "m", kind: "prompt-select" as const, payload: { question: "Should I continue?", options: [{ id: "1", label: "Original agent option" }] }, createdAt: "2026-10-08T00:00:00Z", status: "pending" as const };
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><PendingRequestCard request={request} onApprove={async () => { approvals++; throw new ReplyRequestError("session locked", false); }} /></LocaleProvider>));
+  await act(async () => container.querySelector("button")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Gesperrt");
+  expect(container.querySelector("article")?.getAttribute("data-status")).toBe("pending");
+  expect(container.querySelector("button")?.disabled).toBe(false);
+  expect(container.textContent).toContain("Should I continue?");
+  expect(container.textContent).toContain("Original agent option");
+  expect(approvals).toBe(1);
+});
 test("special-key confirmation stays open and translates without sending a key", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><SpecialKeyBar paneId="p" identity="same-pane" disabled={false} /></LocaleProvider>));
