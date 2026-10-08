@@ -60,6 +60,19 @@ function verifyExpectedPrompt(freshText: string, expected: string): boolean {
   return false;
 }
 
+test('real task occurrence metadata preserves approval binding and expires the old card when the same pane runs a new task', () => {
+  const store = new PendingRequestStore();
+  const detected = detectPendingRequest(permissionScreen)!;
+  const first = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-1')!;
+  expect(first).toMatchObject({ personaId: 'persona-real', taskOccurrenceKey: 'task-run-1' });
+  const repeated = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-1')!;
+  expect(repeated.id).toBe(first.id);
+  const replacement = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-2')!;
+  expect(replacement.id).not.toBe(first.id);
+  expect(store.find(first.id)?.request.status).toBe('expired');
+  expect(replacement.taskOccurrenceKey).toBe('task-run-2');
+});
+
 describe("pending request extraction", () => {
   test("extracts a real-shaped permission prompt and its selectable choices", () => {
     const detected = detectPendingRequest(permissionScreen);

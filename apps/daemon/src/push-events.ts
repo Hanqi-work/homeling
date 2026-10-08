@@ -29,11 +29,12 @@ export class PushEventConsumer {
     const operation = this.activityTail.then(async () => {
       const cursor = (await this.options.store.load()).activityCursor;
       const response = await this.options.activity.list(undefined, cursor);
+      const occurrences = new Map(response.occurrences.map(item => [item.occurrenceKey, item]));
       for (const event of response.events) {
         if (event.kind === 'task.completed' || event.kind === 'task.failed') {
-          const occurrence = response.occurrences.find(o => o.occurrenceKey === event.occurrenceKey && o.personaId === event.personaId && o.paneId === event.paneId);
+          const occurrence = occurrences.get(event.occurrenceKey);
           const persona = await this.options.registry.get(event.personaId);
-          if (occurrence && persona) {
+          if (occurrence && occurrence.personaId === event.personaId && occurrence.paneId === event.paneId && persona) {
             await this.options.output.send({ version: 1, type: 'notification', title: persona.name, body: `${event.kind === 'task.completed' ? '任务完成' : '任务失败'}：${occurrence.title}${event.detail ? ` · ${event.detail}` : ''}`.slice(0, 500), tag: `homeling-task-${event.occurrenceKey}`, url: `/lite/t/${encodeURIComponent(event.paneId)}?occurrence=${encodeURIComponent(event.occurrenceKey)}`, occurrenceKey: event.dedupeKey });
           }
         }

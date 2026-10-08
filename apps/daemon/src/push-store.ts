@@ -1,8 +1,8 @@
-import { mkdir, open, rename, writeFile, rm, lstat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { rename, writeFile, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { MutationAdmission } from './session-lock.ts';
+import { ensurePushPrivateDirectory, readPushPrivateJson } from './push-private-files.ts';
 
 export interface StoredPushSubscription {
   readonly endpoint: string;
@@ -40,13 +40,7 @@ export class PushStore implements PushPersistence {
   private async read(): Promise<PushState> {
     if (this.current) return this.current;
     try {
-      const file = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      let state: PushState;
-      try {
-        const stat = await file.stat();
-        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 16_000_000) throw new Error('unsafe push store permissions');
-        state = JSON.parse(await file.readFile('utf8')) as PushState;
-      } finally { await file.close(); }
+      const state = await readPushPrivateJson<PushState>(this.path, 16_000_000);
       if (state.version !== 1 || !Array.isArray(state.subscriptions) || typeof state.preferences?.enabled !== 'boolean' || !state.deliveries || typeof state.deliveries !== 'object' || !state.pendingOccurrences || typeof state.pendingOccurrences !== 'object' || !Number.isSafeInteger(state.activityCursor) || state.activityCursor < 0) throw new Error('invalid push store');
       if (Object.values(state.deliveries).some(time => !Number.isFinite(time)) || Object.values(state.pendingOccurrences).some(item => !item || typeof item.binding !== 'string' || typeof item.identity !== 'string' || typeof item.occurrenceKey !== 'string' || typeof item.active !== 'boolean')) throw new Error('invalid push occurrence state');
       if (state.subscriptions.some(item => !item || typeof item.owner !== 'string' || typeof item.endpoint !== 'string' || typeof item.keys?.p256dh !== 'string' || typeof item.keys.auth !== 'string')) throw new Error('invalid push subscription state');
@@ -64,9 +58,7 @@ export class PushStore implements PushPersistence {
       const state = structuredClone(await this.read());
       const changed = change(state);
       if (changed.next === state) return changed.result;
-      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-      const directory = await lstat(dirname(this.path));
-      if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || (directory.mode & 0o077) !== 0) throw new Error('unsafe push store directory');
+      await ensurePushPrivateDirectory(dirname(this.path));
       const temporary = `${this.path}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify(changed.next), { mode: 0o600, flag: 'wx' });

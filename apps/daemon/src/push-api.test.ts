@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 import { createECDH } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PushStore } from './push-store.ts';
@@ -11,7 +11,7 @@ import { handleRequest } from './index.ts';
 import { daemonConfigFromEnv } from './config.ts';
 
 test('actual HTTP gate rejects every push business write while locked and cross-origin, then accepts an unlocked preference commit', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'homeling-push-http-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-http-'));
   try {
     const cfg = { ...daemonConfigFromEnv({}), tailscaleHost: 'home.example', trustedUsers: ['alice'] };
     const sessions = new SessionController({ verify: () => secret => secret === 'a'.repeat(43) });
@@ -29,7 +29,7 @@ test('actual HTTP gate rejects every push business write while locked and cross-
 });
 
 test('push enrollment fails closed while locked; enrollment, test-send and removal preserve user admission', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'homeling-push-api-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-api-'));
   try {
     const store = new PushStore(join(dir, 'push.json')); const sent: unknown[] = [];
     const runtime = { store, publicKey: 'public', transport: { send: async (_: unknown, payload: unknown) => { sent.push(payload); return { status: 'sent' as const }; } } };

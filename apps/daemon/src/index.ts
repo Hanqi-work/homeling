@@ -4,6 +4,7 @@
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import type { PaneWire } from '@homeling/contracts';
 import { dirname, join } from "node:path";
 import { ActivityLedger } from "./activity-ledger.ts";
 import { createActivityObserver } from "./activity-observer.ts";
@@ -61,6 +62,14 @@ function personaRuntime(cfg: DaemonConfig, fetcher: BridgeFetch): PersonaRuntime
     personaRuntimes.set(cfg, runtime);
   }
   return runtime;
+}
+
+async function resolvePendingOwnership(runtime: PersonaRuntime, pane: PaneWire): Promise<{ personaId: string; taskOccurrenceKey?: string } | undefined> {
+  const persona = (await runtime.registry.list()).find(item => item.spaceId === pane.workspaceId);
+  if (!persona) return undefined;
+  if (persona.mainPaneId === pane.paneId) return { personaId: persona.id };
+  const task = await runtime.activity?.ownership(pane.paneId);
+  return { personaId: persona.id, ...(task?.personaId === persona.id && task.spaceId === pane.workspaceId && task.paneId === pane.paneId ? { taskOccurrenceKey: task.occurrenceKey } : {}) };
 }
 
 function isPersonaWrite(pathname: string): boolean {
@@ -255,10 +264,7 @@ export async function handleRequest(
   }
   if (pathname === API_REQUESTS_PATH && req.method === "GET") {
     try {
-      return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login"), Date.now(), async (pane) => {
-        const personas = await runtime.registry.list();
-        return personas.find(persona => persona.spaceId === pane.workspaceId)?.id;
-      }));
+      return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login"), Date.now(), pane => resolvePendingOwnership(runtime, pane)));
     } catch {
       return Response.json({ error: "bridge unavailable" }, { status: 502 });
     }

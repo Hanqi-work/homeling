@@ -1,25 +1,17 @@
 import webpush from 'web-push';
-import { mkdir, open, writeFile, lstat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createECDH, ECDH } from 'node:crypto';
 import type { PushTransport } from './push-output.ts';
+import { ensurePushPrivateDirectory, readPushPrivateJson } from './push-private-files.ts';
 
 export interface VapidKeys { readonly publicKey: string; readonly privateKey: string }
 export async function loadOrCreateVapid(path: string): Promise<VapidKeys> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const directory = await lstat(dirname(path));
-  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || (directory.mode & 0o077) !== 0) throw new Error('unsafe VAPID directory');
+  await ensurePushPrivateDirectory(dirname(path));
   try {
     await writeFile(path, JSON.stringify(webpush.generateVAPIDKeys()), { flag: 'wx', mode: 0o600 });
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let keys: VapidKeys;
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 1024) throw new Error('unsafe VAPID file');
-    keys = JSON.parse(await file.readFile('utf8')) as VapidKeys;
-  } finally { await file.close(); }
+  const keys = await readPushPrivateJson<VapidKeys>(path, 1024);
   const ecdh = createECDH('prime256v1');
   ecdh.setPrivateKey(Buffer.from(keys.privateKey, 'base64url'));
   if (ecdh.getPublicKey().toString('base64url') !== keys.publicKey) throw new Error('invalid VAPID pair');

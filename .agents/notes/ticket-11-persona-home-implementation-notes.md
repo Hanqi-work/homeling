@@ -21,7 +21,9 @@
 - Vite localhost+浏览器fetch mocks：desktop/mobile首页、详情、大avatar、本机Computers、partial删除提示、Escape、New/Settings检查通过。只有本地fixture浏览器证据；未连接真实Collie/Herdr、未变更服务、未声称真机验过。browser space4已finish；收到主space3独占后不再操作浏览器。
 - UI机械detector唯一gray-on-color告警为误报（定位行合并了中性色说明与独立green按钮，按钮文本实际green-950）；不为误报改全局样式。
 - 未新增env要求，不改README。#19尚非整票完成：仅actual contract依赖，不宣称业务完整写锁已生效；完整guard/boundary由其后续合入与交叉验收，父已明确允许完整#11先交付。
-- 最终三绿与review复核待本轮记录。
+- 冻结feature revision ddd9d6bf88c5e74df627a34b4e297795b1f36675，作者rolex <torolex@163.com>；base integration 3a322b2f。最终 `bun test` 286 pass / 0 fail（1074 assertions、42 files），`bun run typecheck` 与 `bun run build` 全部成功。没有package.json `verify-seams`脚本，未声称该额外命令通过。
+- 独立code-reviewer a5d64c87838234114首轮真实阻塞0；focused fake DOM/mock fetch 13 passed。顾问增量经主协调转达仅剩deleted:false洗掉此前unknown风险；已另一个red→green DOM切片修为“本次未确认删除”，保留此前unknown风险，未扩API/slots，未重写冻结ddd9d6bf。
+- 最终增量后 `bun test` **287 pass / 0 fail**（1080 assertions、42 files），`bun run typecheck` 与 `bun run build` 全部成功；integration最新仍3a322b2fc942b158e31ab97fbd02ea91315467cb。普通code-reviewer增量复核待返回。临时Vite验收进程已停止，browser taskspace已关闭。
 
 ## Consumer wiring
 - `App({slots?: PersonaShellSlots})`，`shell-slots.ts`定义 `homeSummary?:ReactNode; memory/activity/customize?:(personaId:string)=>ReactNode; settings?:ReactNode`。

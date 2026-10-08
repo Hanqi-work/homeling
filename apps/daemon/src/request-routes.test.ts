@@ -4,6 +4,11 @@ import type { BridgeFetch } from "./bridge-proxy.ts";
 import { daemonConfigFromEnv } from "./config.ts";
 import { PersonaRegistry } from './persona-registry.ts';
 import { HerdrSocketClient } from './herdr-client.ts';
+import { ActivityLedger } from './activity-ledger.ts';
+import { fixtureAdmission } from './session-test-fixture.ts';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const permissionScreen = `Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend`;
 
@@ -55,7 +60,18 @@ describe("pending request daemon routes", () => {
     const config = cfg();
     const registry = new PersonaRegistry('/unused/registry.json', async () => JSON.stringify({ version: 1, personas: [{ id: 'persona-actual', spaceId: 'w1', mainPaneId: 'w1:p1', name: 'Work', avatar: { color: '#86efac' }, launcherCommand: 'claude', createdAt: '2026-10-09T00:00:00Z', paused: false, systemPromptInjected: false }], archivedSpaces: [], orphans: [] }));
     const mapped = await handleRequest(request('/lite/api/requests'), config, fetcher, { cfg: config, fetcher, registry, herdr: new HerdrSocketClient({ socketPath: '/unused/herdr.sock' }) });
-    expect((await mapped.json())[0].personaId).toBe('persona-actual');
+    const [mappedMain] = await mapped.json();
+    expect(mappedMain.personaId).toBe('persona-actual');
+    expect(mappedMain.taskOccurrenceKey).toBeUndefined();
+    const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-request-owner-'));
+    try {
+      const activity = new ActivityLedger(join(dir, 'activity.json'));
+      const task = await activity.register({ personaId: 'persona-actual', spaceId: 'w1', paneId: 'w1:p1', title: 'Approve fixtures' }, fixtureAdmission());
+      const taskRegistry = new PersonaRegistry('/unused/task-registry.json', async () => JSON.stringify({ version: 1, personas: [{ id: 'persona-actual', spaceId: 'w1', mainPaneId: 'w1:main', name: 'Work' }], archivedSpaces: [], orphans: [] }));
+      const taskCfg = cfg();
+      const taskResponse = await handleRequest(request('/lite/api/requests'), taskCfg, fetcher, { cfg: taskCfg, fetcher, registry: taskRegistry, activity, herdr: new HerdrSocketClient({ socketPath: '/unused/herdr.sock' }) });
+      expect((await taskResponse.json())[0]).toMatchObject({ personaId: 'persona-actual', taskOccurrenceKey: task.occurrenceKey });
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   test("approval rejects cross-origin and non-JSON calls before bridge writes", async () => {

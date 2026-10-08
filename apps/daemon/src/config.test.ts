@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { daemonConfigFromEnv } from "./config.ts";
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 
 describe("daemonConfigFromEnv", () => {
   function withEnv(env: Record<string, string>, fn: () => void) {
@@ -53,6 +55,13 @@ describe("daemonConfigFromEnv", () => {
     const c = daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: "/tmp/registry.json", HERDR_SOCKET_PATH: "/tmp/herdr.sock" });
     expect(c.registryPath).toBe("/tmp/registry.json");
     expect(c.herdrSocketPath).toBe("/tmp/herdr.sock");
+  });
+
+  test('push secrets/state must stay in an absolute directory outside both repository and Collie', () => {
+    expect(() => daemonConfigFromEnv({ HOMELING_PUSH_DIR: 'push-data' })).toThrow(/absolute/);
+    expect(() => daemonConfigFromEnv({ HOMELING_PUSH_DIR: resolve(import.meta.dir, '../../..', '.private-push') })).toThrow(/outside/);
+    expect(() => daemonConfigFromEnv({ HOMELING_PUSH_DIR: join(homedir(), '.local/share/collie/push') })).toThrow(/outside/);
+    expect(daemonConfigFromEnv({ HOMELING_PUSH_DIR: '/tmp/homeling-external-push', HOMELING_PUSH_SUBJECT: 'mailto:test@example.com' })).toMatchObject({ pushDataDir: '/tmp/homeling-external-push', pushSubject: 'mailto:test@example.com' });
   });
 
   test("explicit env object wins over process.env", () => {

@@ -6,7 +6,7 @@ import { PushStore } from './push-store.ts';
 import { createWebPushTransport, loadOrCreateVapid } from './push-transport.ts';
 import { createPushOutput } from './push-output.ts';
 import { PushEventConsumer } from './push-events.ts';
-import { readPendingPushObservations } from './push-source.ts';
+import { readPendingPushBatch } from './push-source.ts';
 import type { PushApiRuntime } from './push-api.ts';
 
 export interface PushDaemonRuntime extends PushApiRuntime { stop(): void }
@@ -27,13 +27,11 @@ export async function initializePushRuntime(cfg: DaemonConfig, persona: PersonaR
     if (stopped || polling) return;
     polling = true;
     try {
-      const personas = await persona.registry.list();
-      const latestTasks = new Map((await persona.activity!.list()).occurrences.map(item => [item.paneId, item]));
-      const validBindings = new Set(personas.map(item => `main:${item.id}:${item.spaceId}:${item.mainPaneId}`));
-      for (const task of latestTasks.values()) if (personas.some(item => item.id === task.personaId && item.spaceId === task.spaceId)) validBindings.add(`task:${task.occurrenceKey}`);
-      await consumer.retainBindings(validBindings);
-      const observations = await readPendingPushObservations(cfg, persona.fetcher, persona.registry, paneId => persona.activity!.ownership(paneId));
-      if (!stopped) await consumer.observePending(observations);
+      const batch = await readPendingPushBatch(cfg, persona.fetcher, persona.registry, async () => (await persona.activity!.list()).occurrences);
+      if (!stopped) {
+        await consumer.retainBindings(batch.validBindings);
+        await consumer.observePending(batch.observations);
+      }
     } catch { console.error('[homeling-daemon] push observation gap; retaining pending identities'); }
     finally { polling = false; }
   };

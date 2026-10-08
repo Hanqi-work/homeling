@@ -34,7 +34,10 @@ export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetail
     onDeleteStarted?.();
     try {
       const outcome = await deletePersona(persona.id);
-      if (!outcome.deleted) { setError("Persona was not deleted. Check its current state before retrying."); return; }
+      if (!outcome.deleted) {
+        setError(`This attempt did not confirm deletion. Check the persona’s current state before retrying.${deletionUnknown.current ? " The previous deletion remains unconfirmed and may have partially completed; check Homelings and the main pane before retrying." : ""}`);
+        return;
+      }
       setRemoved(true); setConfirming(false);
       setResult(outcome.archived
         ? "Homeling deleted. Main pane closed; space archived and task panes retained."

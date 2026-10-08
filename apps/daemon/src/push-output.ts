@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { PushPayload, PushRetractPayload } from '../../../packages/contracts/src/push.ts';
+import type { PushPayload } from '../../../packages/contracts/src/push.ts';
 import type { PushPersistence, StoredPushSubscription } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 import { SessionLocked, type MutationAdmission } from './session-lock.ts';
 
 export type PushSendResult = { readonly status: 'sent' | 'invalid' | 'failed'; readonly statusCode?: number };
-export interface PushTransport { send(subscription: StoredPushSubscription, payload: PushPayload | PushRetractPayload): Promise<PushSendResult> }
+export interface PushTransport { send(subscription: StoredPushSubscription, payload: PushPayload): Promise<PushSendResult> }
 export interface PushClock { now(): number }
 export interface PushDeliveryReport { readonly sent: number; readonly invalid: number; readonly failed: number; readonly suppressed: number }
 export interface PushOutput { send(payload: PushPayload): Promise<PushDeliveryReport>; retract(tag: string): Promise<void> }
@@ -31,6 +31,7 @@ export function createPushOutput(options: {
         for (const subscription of state.subscriptions) {
           if (cancelled.has(payload.tag)) { report.suppressed++; continue; }
           const key = createHash('sha256').update(payload.occurrenceKey).update('\0').update(subscription.endpoint).digest('hex');
+          if (state.deliveries[key] !== undefined) { report.suppressed++; continue; }
           const claimed = await options.store.mutate(current => {
             if (!current.preferences.enabled || cancelled.has(payload.tag) || current.deliveries[key] !== undefined || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: false };
             return { next: { ...current, deliveries: { ...current.deliveries, [key]: options.clock.now() } }, result: true };
