@@ -43,6 +43,33 @@ describe("daemon STT", () => {
     expect((await handleRequest(request("/lite/api/pane/p1/reply"), cfg, fetcher)).status).toBe(415);
     expect(calls).toBe(0);
   });
+  test("cancellation during upload releases the body reader without contacting bridge", async () => {
+    const controller = new AbortController();
+    let cancelled = false;
+    let calls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      start(output) { output.enqueue(new Uint8Array([1, 2])); },
+      cancel() { cancelled = true; },
+    });
+    const response = handleRequest(request(undefined, { body: stream, signal: controller.signal }), cfg,
+      async () => { calls++; return Response.json({ ok: true }); });
+    controller.abort();
+    expect((await response).status).toBeGreaterThanOrEqual(400);
+    expect(cancelled).toBe(true);
+    expect(calls).toBe(0);
+  });
+
+  test("returns upstream refusal and propagates caller cancellation", async () => {
+    const controller = new AbortController();
+    const response = await handleRequest(request(undefined, { signal: controller.signal }), cfg, async (_input, init) => {
+      controller.abort();
+      expect(init?.signal?.aborted).toBe(true);
+      return Response.json({ ok: false, code: "stt.unconfigured", error: "not configured" }, { status: 503 });
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "stt.unconfigured" });
+  });
+
   test("forwards raw audio to the exact bridge endpoint, never to a pane", async () => {
     const calls: string[] = [];
     const response = await handleRequest(request(), cfg, async (url, init) => {

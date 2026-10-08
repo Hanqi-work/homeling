@@ -92,6 +92,15 @@ describe("voice input recording boundary", () => {
     expect(f.calls()).toBe(0);
   });
 
+  test("cancel releases microphone tracks even when the recorder fails to stop", async () => {
+    const f = fixture();
+    await f.voice.start();
+    f.recorder.stop = () => { throw new Error("stop failed"); };
+    expect(() => f.voice.cancel()).not.toThrow();
+    expect(f.stopped()).toBe(1);
+    expect(f.calls()).toBe(0);
+  });
+
   test("provider failure and empty transcript are errors, not replacement drafts", async () => {
     for (const transcribe of [async () => { throw new Error("转写服务忙"); }, async () => " "]) {
       const f = fixture();

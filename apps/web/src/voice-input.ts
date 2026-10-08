@@ -73,8 +73,13 @@ export class VoiceInput {
       this.recorder.ondataavailable = null;
       this.recorder.onstop = null;
       this.recorder.onerror = null;
-      if (this.recorder.state !== "inactive") this.recorder.stop();
+      const recorder = this.recorder;
       this.recorder = null;
+      try {
+        if (recorder.state !== "inactive") recorder.stop();
+      } catch {
+        // Cancellation still stops the actual microphone tracks below, even if the recorder failed.
+      }
     }
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
@@ -126,11 +131,9 @@ export class VoiceInput {
       if (generation !== this.generation) return;
       this.release();
       const name = error instanceof Error ? error.name : "";
-      const message = name === "NotAllowedError"
-        ? "麦克风权限被拒绝，请在浏览器设置中允许后重试。"
-        : name === "NotFoundError"
-          ? "未找到麦克风，请连接设备后重试。"
-          : error instanceof Error ? error.message : "无法录音，请检查麦克风后重试。";
+      let message = error instanceof Error ? error.message : "无法录音，请检查麦克风后重试。";
+      if (name === "NotAllowedError") message = "麦克风权限被拒绝，请在浏览器设置中允许后重试。";
+      else if (name === "NotFoundError") message = "未找到麦克风，请连接设备后重试。";
       this.update("error", message);
     }
   }

@@ -60,6 +60,30 @@ async function mount(dependencies: VoiceInputDependencies) {
 }
 
 describe("voice draft composer", () => {
+  test("permission refusal is shown in the UI and leaving the composer releases recording tracks", async () => {
+    const f = media();
+    const getStream = f.dependencies.getStream;
+    f.dependencies.getStream = async () => { throw new DOMException("denied", "NotAllowedError"); };
+    const ui = await mount(f.dependencies);
+    await click("开始语音输入");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("麦克风权限被拒绝");
+    expect(ui.sends).toEqual([]);
+    f.dependencies.getStream = getStream;
+    await click("开始语音输入");
+    await act(async () => root.render(null));
+    expect(f.released()).toBe(1);
+  });
+
+  test("explicit sending during transcription cancels the old result instead of repopulating a draft", async () => {
+    const f = media(); const ui = await mount(f.dependencies);
+    await click("开始语音输入"); await click("停止并转写");
+    await click("Send");
+    expect(ui.sends).toEqual(["原草稿"]);
+    expect(f.aborted()).toBe(true);
+    await act(async () => f.finish("不应进入草稿"));
+    expect(container.querySelector("textarea")!.value).toBe("原草稿");
+  });
+
   test("recording enters an editable draft, and only explicit Send submits it", async () => {
     const f = media(); const ui = await mount(f.dependencies);
     await click("开始语音输入"); await click("停止并转写");

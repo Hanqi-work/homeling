@@ -27,7 +27,7 @@ const STT_MEDIA_TYPES = new Set([
   "audio/x-m4a", "audio/mpeg", "audio/wav", "audio/x-wav",
 ]);
 
-async function readAudio(req: Request): Promise<ArrayBuffer | Response> {
+async function readAudio(req: Request, signal: AbortSignal): Promise<ArrayBuffer | Response> {
   const mediaType = req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (!STT_MEDIA_TYPES.has(mediaType)) return Response.json({ error: "Unsupported audio format" }, { status: 415 });
   const declared = Number(req.headers.get("content-length"));
@@ -36,7 +36,12 @@ async function readAudio(req: Request): Promise<ArrayBuffer | Response> {
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let cancellation: Promise<void> | undefined;
+  const cancelReader = () => { cancellation = reader.cancel(); };
+  signal.addEventListener("abort", cancelReader, { once: true });
+  if (signal.aborted) cancelReader();
   try {
+    signal.throwIfAborted();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -47,8 +52,10 @@ async function readAudio(req: Request): Promise<ArrayBuffer | Response> {
       }
       chunks.push(value);
     }
+    signal.throwIfAborted();
   } finally {
-    reader.releaseLock();
+    signal.removeEventListener("abort", cancelReader);
+    try { await cancellation; } finally { reader.releaseLock(); }
   }
   if (size === 0) return Response.json({ error: "Empty recording" }, { status: 400 });
   const audio = new Uint8Array(size);
@@ -178,17 +185,19 @@ export async function proxyBridgeRequest(
   if (contentType) headers.set("content-type", contentType);
 
   try {
-    const body = req.method !== "POST"
-      ? undefined
-      : isSttRoute
-        ? await readAudio(req)
-        : isStopRoute
-          ? new TextEncoder().encode('{"keys":["ctrl+c"]}')
-          : await req.arrayBuffer();
-    if (body instanceof Response) return body;
-    const signal = isSttRoute
-      ? AbortSignal.any([req.signal, AbortSignal.timeout(120_000)])
-      : url.pathname === `${BROWSER_API_PREFIX}launch` ? AbortSignal.timeout(LAUNCH_TIMEOUT_MS) : undefined;
+    let signal: AbortSignal | undefined;
+    if (isSttRoute) signal = AbortSignal.any([req.signal, AbortSignal.timeout(120_000)]);
+    else if (url.pathname === `${BROWSER_API_PREFIX}launch`) signal = AbortSignal.timeout(LAUNCH_TIMEOUT_MS);
+
+    let body: BodyInit | undefined;
+    if (req.method === "POST") {
+      if (isSttRoute) {
+        const audio = await readAudio(req, signal!);
+        if (audio instanceof Response) return audio;
+        body = audio;
+      } else if (isStopRoute) body = new TextEncoder().encode('{"keys":["ctrl+c"]}');
+      else body = await req.arrayBuffer();
+    }
     const upstream = await fetcher(target, { method: req.method, headers, body, redirect: "manual", signal });
     const responseHeaders = new Headers();
     for (const name of ["content-type", "cache-control", "etag"]) {
@@ -197,6 +206,10 @@ export async function proxyBridgeRequest(
     }
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   } catch (error) {
+    if (isSttRoute) {
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      return Response.json({ ok: false, error: timedOut ? "Transcription timed out" : "Transcription unavailable" }, { status: timedOut ? 504 : 502 });
+    }
     if (url.pathname === `${BROWSER_API_PREFIX}launch`) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       return Response.json(
