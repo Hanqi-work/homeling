@@ -29,6 +29,8 @@ interface PaneConversationProps {
   paneId: string;
   personaId?: string;
   persona?: PersonaView;
+  draft: string;
+  setDraft: (value: string) => void;
 }
 
 function failureLabel(message: OutgoingMessage): string {
@@ -37,7 +39,7 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId, personaId, persona }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId, persona, draft, setDraft }: PaneConversationProps): ReactElement {
   const lockSession = useSessionSnapshot();
   const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
@@ -63,7 +65,6 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
   const requestPollState = useRef<RequestPollState | null>(null);
   if (!requestPollState.current) requestPollState.current = new RequestPollState();
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [draft, setDraft] = useState("");
   const [sendBlocked, setSendBlocked] = useState(false);
   const sendBlockedRef = useRef(false);
   const blockedMessageIds = useRef(new Set<string>());
@@ -488,6 +489,11 @@ function PaneConversation({ paneId, personaId, persona }: PaneConversationProps)
 export function ConversationPage(): ReactElement {
   const { paneId: routePaneId, personaId } = useParams();
   const routePaneIdValue = routePaneId ?? "";
+  const lockSession = useSessionSnapshot();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftKey = personaId ? `persona:${personaId}` : `pane:${routePaneIdValue}`;
+  const draft = drafts[draftKey] ?? "";
+  const setDraft = (value: string) => setDrafts((current) => ({ ...current, [draftKey]: value }));
   const [persona, setPersona] = useState<PersonaView | null>(null);
   const [personaLookupError, setPersonaLookupError] = useState<string | null>(null);
 
@@ -497,6 +503,7 @@ export function ConversationPage(): ReactElement {
       setPersonaLookupError(null);
       return;
     }
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       try {
         const result = await fetchPersonas(signal);
@@ -511,7 +518,7 @@ export function ConversationPage(): ReactElement {
       }
     }, 3000);
     return () => session.stop();
-  }, [personaId]);
+  }, [personaId, lockSession.ready, lockSession.epoch]);
 
   if (personaId) {
     if (!persona || persona.id !== personaId) {
@@ -524,10 +531,10 @@ export function ConversationPage(): ReactElement {
     }
     return <>
       {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
-      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} />
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} draft={draft} setDraft={setDraft} />
     </>;
   }
 
   if (!routePaneIdValue) return <main className="p-6 text-sm">pane id missing</main>;
-  return <PaneConversation key={routePaneIdValue} paneId={routePaneIdValue} />;
+  return <PaneConversation key={routePaneIdValue} paneId={routePaneIdValue} draft={draft} setDraft={setDraft} />;
 }

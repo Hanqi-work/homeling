@@ -1,3 +1,7 @@
+import { dirname, join } from "node:path";
+import { PersonaMemoryStore } from "./persona-memory.ts";
+import { memoryInjectionPlan } from "./memory-injection.ts";
+import { prepareMemorySession, memoryMessageText, injectedMessagePresentation } from "./session-memory.ts";
 import { SessionLocked, lockedResponse, type MutationAdmission } from "./session-lock.ts";
 import type { SystemAdmission } from "./system-admission.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
@@ -12,6 +16,18 @@ export interface PersonaRuntime {
   readonly herdr: HerdrPort;
   readonly cfg: DaemonConfig;
   readonly fetcher: BridgeFetch;
+  readonly memory?: PersonaMemoryStore;
+}
+
+const memoryStores = new WeakMap<PersonaRuntime, PersonaMemoryStore>();
+export function memoryStoreOf(runtime: PersonaRuntime): PersonaMemoryStore {
+  if (runtime.memory) return runtime.memory;
+  let store = memoryStores.get(runtime);
+  if (!store) {
+    store = new PersonaMemoryStore(runtime.cfg.memoryPath ?? join(dirname(runtime.cfg.registryPath), "memory"));
+    memoryStores.set(runtime, store);
+  }
+  return store;
 }
 
 const personaOperationTails = new WeakMap<PersonaRuntime, Map<string, Promise<void>>>();
@@ -87,6 +103,8 @@ export async function createPersona(
   const launcher = launchers.launchers.find((row) => row.command === input.launcherCommand) ??
     (input.launcherCommand ? undefined : launchers.launchers[0]);
   if (!launcher) throw new Error(input.launcherCommand ? "Launcher is not allowlisted" : "No launchers are allowlisted");
+  const id = newPersonaId();
+  let memorySession: Persona["memorySession"];
   let space: HerdrCreatedSpace;
   try {
     space = await admission.dispatch(() => runtime.herdr.createSpace(input.name, launcher.cwd ?? launchers.home));
@@ -101,7 +119,9 @@ export async function createPersona(
     throw error;
   }
   try {
-    await startLauncher(runtime, launcher, space.root_pane.pane_id, admission);
+    const prepared = await prepareMemorySession(memoryStoreOf(runtime), id, space.root_pane.pane_id, launcher.command, input.systemPrompt ?? "", admission);
+    memorySession = prepared.session;
+    await startLauncher(runtime, { ...launcher, command: prepared.command }, space.root_pane.pane_id, admission);
   } catch (error) {
     let rollbackError = "";
     try {
@@ -117,11 +137,12 @@ export async function createPersona(
       reason: `persona create failed: ${error instanceof Error ? error.message : String(error)}${rollbackError}`,
     });
     const message = `Could not start persona pane; created space is marked for cleanup${rollbackError}`;
+    if (error instanceof SessionLocked) throw error;
     throw error instanceof HerdrRpcError ? new HerdrRpcError(error.code, message) : new Error(message);
   }
 
   const persona: Persona = {
-    id: newPersonaId(),
+    id,
     name: input.name,
     avatar: input.avatar,
     spaceId: space.workspace_id,
@@ -129,6 +150,8 @@ export async function createPersona(
     systemPrompt: input.systemPrompt ?? "",
     createdAt: new Date().toISOString(),
     launcherCommand: launcher.command,
+    memorySession,
+    systemPromptInjected: memorySession?.strategy === "pi-append-system-prompt",
   };
   try {
     await runtime.registry.createPersona(persona, admission);
@@ -232,40 +255,62 @@ export function sendPersonaMessage(
     if (persona.paused) return Response.json({ error: "persona paused" }, { status: 409 });
     const headers = new Headers({ accept: "application/json", "content-type": "application/json" });
     if (login) headers.set("tailscale-user-login", login);
-    const submittedText = !persona.systemPromptInjected && persona.systemPrompt
-      ? `[Persona instructions]\n${persona.systemPrompt}\n[End persona instructions]\n\n${text}`
-      : text;
+    if (persona.memoryDeliveryUnknown) return Response.json({ ok: false, code: "memory.delivery_unknown", deliveryUnknown: true, error: "Previous message delivery is unknown or partial; inspect the pane before starting a new session. No automatic replay." }, { status: 409 });
+    let session = persona.memorySession?.paneId === persona.mainPaneId ? persona.memorySession : undefined;
+    if (!session) {
+      // Existing panes cannot gain pi startup flags retroactively. Freeze only an as-yet-unsent first message.
+      const plan = memoryInjectionPlan("", persona.systemPrompt, await memoryStoreOf(runtime).read(id));
+      session = { paneId: persona.mainPaneId, strategy: "first-message-prefix", unsupported: true, notice: "unsupported native injection for this existing session; first-message prefix only, native pi memory applies next session.", prefix: persona.systemPromptInjected ? "" : plan.context };
+      await runtime.registry.patchPersona(id, { memorySession: session }, admission);
+    }
+    const submittedText = memoryMessageText(session, !!persona.systemPromptInjected, text);
+    if (submittedText.length > 100_000) return Response.json({ ok: false, error: "Message plus memory exceeds 100,000 characters; shorten the message or memory", textDelivered: false, deliveryUnknown: false }, { status: 413 });
+    const personaMessagePresentation = injectedMessagePresentation(id, persona.mainPaneId, text, submittedText);
+    const memoryInjection = { strategy: session.strategy, unsupported: session.unsupported, notice: session.notice };
     let response: Response;
+    let dispatched = false;
     try {
       if (controlKeyBlocksText(runtime.cfg, persona.mainPaneId)) {
         return Response.json({ ok: false, textDelivered: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
       }
-      response = await admission.dispatch(() => runtime.fetcher(
-        `${runtime.cfg.bridgeOrigin}/api/pane/${encodeURIComponent(persona.mainPaneId)}/reply`,
-        { method: "POST", headers, body: JSON.stringify({ text: submittedText, submit: true }) },
-      ));
+      // Durable intent prevents a daemon crash or lost reply from replaying a first-message injection.
+      await runtime.registry.patchPersona(id, { memoryDeliveryUnknown: true }, admission);
+      response = await admission.dispatch(() => {
+        dispatched = true;
+        return runtime.fetcher(
+          `${runtime.cfg.bridgeOrigin}/api/pane/${encodeURIComponent(persona.mainPaneId)}/reply`,
+          { method: "POST", headers, body: JSON.stringify({ text: submittedText, submit: true }) },
+        );
+      });
     } catch (error) {
-      if (error instanceof SessionLocked) return lockedResponse();
+      if (!dispatched) {
+        // Limited result settlement for this provably-undispatched attempt, not a new user mutation.
+        await runtime.registry.patchPersona(id, { memoryDeliveryUnknown: false });
+        if (error instanceof SessionLocked) return lockedResponse();
+        throw error;
+      }
       return Response.json({
-        ok: false, deliveryUnknown: true, personaConfirmationText: submittedText,
+        ok: false, deliveryUnknown: true, personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection,
         error: error instanceof Error ? error.message : "Message delivery outcome unknown",
       }, { status: 502 });
     }
     const outcome = await response.clone().json().catch(() => null) as Record<string, unknown> | null;
     const accepted = response.ok && outcome?.ok === true;
     const textDelivered = outcome?.textDelivered === true;
-    if ((accepted || textDelivered) && !persona.systemPromptInjected && persona.systemPrompt) {
-      try { await runtime.registry.patchPersona(id, { systemPromptInjected: true }); }
-      catch (error) { console.error(`[homeling-daemon] could not persist prompt-injection marker: ${error instanceof Error ? error.message : String(error)}`); }
+    const partial = !accepted && (textDelivered || outcome?.deliveryUnknown === true || response.status >= 500 || !outcome || outcome.ok !== false);
+    try {
+      // Only settle this already-dispatched attempt; never use a system actor for delegated user work.
+      await runtime.registry.patchPersona(id, { memoryDeliveryUnknown: partial, ...((accepted || textDelivered) ? { systemPromptInjected: true } : {}) });
+    } catch {
+      return Response.json({ ok: false, deliveryUnknown: true, personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection, error: "Message was dispatched but its injection outcome could not be persisted; reconcile before retrying" }, { status: 503 });
     }
-    const partial = textDelivered || outcome?.deliveryUnknown === true || response.status >= 500;
     if (accepted || partial) {
       const headers = new Headers(response.headers);
       headers.set("content-type", "application/json; charset=utf-8");
       return new Response(JSON.stringify({
         ...(outcome ?? { ok: false, error: `Message delivery outcome unknown (${response.status})` }),
         ...(partial && !textDelivered ? { deliveryUnknown: true } : {}),
-        personaConfirmationText: submittedText,
+        personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection,
       }), { status: response.status, statusText: response.statusText, headers });
     }
     return response;
@@ -368,11 +413,14 @@ async function recoverPersona(runtime: PersonaRuntime, id: string, admission: Sy
     let recoveredPane: HerdrPane | undefined;
     try {
       recoveredPane = await admission.dispatch(() => runtime.herdr.createTab(persona.spaceId, launcher.cwd));
-      await startLauncher(runtime, launcher, recoveredPane.pane_id, admission);
+      const prepared = await prepareMemorySession(memoryStoreOf(runtime), id, recoveredPane.pane_id, launcher.command, persona.systemPrompt, admission);
+      await startLauncher(runtime, { ...launcher, command: prepared.command }, recoveredPane.pane_id, admission);
       const updated = await runtime.registry.patchPersona(id, {
         mainPaneId: recoveredPane.pane_id,
         launcherCommand: launcher.command,
-        systemPromptInjected: false,
+        systemPromptInjected: prepared.session.strategy === "pi-append-system-prompt",
+        memorySession: prepared.session,
+        memoryDeliveryUnknown: false,
         needsAttention: undefined,
       }, admission);
       if (!updated) throw new Error("persona was deleted during recovery");

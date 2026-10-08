@@ -1,12 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { sessionState } from "./session-state.ts";
-beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "shell-fixture" }); sessionState.caughtUp(); });
 import { Window } from "happy-dom";
 import { act } from "react";
 import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router";
 import type { Root } from "react-dom/client";
 import { App } from "./App.tsx";
 import type { PersonaShellSlots } from "./shell-slots.ts";
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "persona-shell-fixture" }); sessionState.caughtUp(); });
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -126,7 +126,7 @@ test("unknown deletion stays visible across empty-list polling and a later locke
     if (init?.method === "DELETE") {
       writes++;
       if (writes === 1) throw new Error("connection lost");
-      return Response.json({ error: "Session locked", executed: false, deliveryUnknown: false }, { status: 423 });
+      return Response.json({ error: "Session locked", code: "session.locked", executed: false, deliveryUnknown: false }, { status: 423 });
     }
     if (String(url).endsWith("persona/list")) return Response.json({ personas: writes > 0 ? [] : [persona] });
     return Response.json({ paneId: "p", available: false, reason: "no-log" });
