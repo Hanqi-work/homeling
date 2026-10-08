@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# daemon 反代只读 bridge API
+# daemon 反代 bridge API
 
 ## Context
 
@@ -10,21 +10,30 @@ status: accepted
 
 ## Decision
 
-浏览器只向 daemon 同源请求 `/lite/api/*`。daemon 在自身 `checkAccess` 通过后，按 `/lite/api/` 前缀映射到 bridge loopback origin，并只代理以下 GET 路由：
+浏览器只向 daemon 同源请求 `/lite/api/*`。daemon 在自身 `checkAccess` 通过后，按 `/lite/api/` 前缀映射到 bridge loopback origin，并只代理以下路由：
 
 - `GET /api/snapshot`
 - `GET /api/pane/:id/history`
+- `POST /api/pane/:id/reply`（唯一写路由）
 
-`history` 的 `limit`、`before` 等 query 原样传递。路径解码/遍历、非白名单路由、其他 HTTP 方法均拒绝；不代理 Collie `/chat`、写接口或未来新增的 bridge API。透传已验证的 `Tailscale-User-Login`，保留 bridge 自身的鉴权门。daemon 与 bridge 仍只监听 loopback。
+`history` 的 `limit`、`before` 等 query 原样传递。路径解码/遍历、非白名单路由、其他 HTTP 方法均拒绝；不代理 Collie `/chat`、其他写接口或未来新增的 bridge API。POST 继续经过 daemon `checkAccess` 的 Host、Origin、身份校验；只有直接 loopback peer 且 loopback Host 才允许无 Origin，Tailscale Serve 的 loopback 代理 peer 不视为本机。非 loopback POST 必须携带与配置 Tailscale HTTPS origin 完全匹配的 Origin。透传已验证的 `Tailscale-User-Login`，保留 bridge 自身的鉴权门。daemon 与 bridge 仍只监听 loopback。
+
+## 送达边界（ticket #4）
+
+HTTP 2xx 只表示 Collie 接受了 reply 请求，不表示 agent 已消费文本。发送时记录文本与发送时间；只有后续 `GET /api/pane/:id/history` 出现 `role: "user"`、文本完全相同且解析后的 `ts >= sentAt` 的条目，才确认“已送达”。多条相同文本按发送时间先进先出，与不同 history 条目一一匹配。确认前乐观消息独立保留，不因旧 history 快照回滚；确认后用 history 条目替代临时消息并显示已送达。
+
+## daemon 层 CSRF 缓解（ticket #4）
+
+Collie reply handler 不校验 Content-Type，因此浏览器的 `text/plain` 简单表单可以尝试跨站 POST JSON 形态的 body；zero-touch 原则下不修改上游。daemon 是新增边界，从严要求非 loopback 调用使用匹配的 Tailscale HTTPS Origin，并且 reply body 必须是 `application/json`（可带参数）；无 Origin 仅对直接 loopback peer + loopback Host 豁免。Tailscale Serve 到 daemon 的 peer 虽是 loopback，但 tailnet Host 不属于本机豁免，仍需身份与 Origin。
 
 ## Options considered
 
 - **浏览器直连 `:8787`**：手机访问时该地址指向手机自身，且 CORS / identity 处理分叉，拒绝。
 - **对 bridge 开放宽泛 CORS**：扩大现有 bridge 暴露面，并违反 zero-touch，拒绝。
-- **daemon 窄白名单反代**：浏览器同源，bridge 仍为只读数据源，选定。
+- **daemon 窄白名单反代**：浏览器同源，bridge 只开放明确列出的读路由与 pane reply，选定。
 
 ## Consequences
 
 - 前端必须使用 Vite base-relative `/lite/api/` URL；daemon 收到完整 `/lite/api/*`，不得假定前缀被 Tailscale 剥离。
 - 新增反代 allowlist 时需同步更新此 ADR 与测试；默认拒绝，不因 bridge API 增长而自动放宽。
-- daemon 不保存 bridge 数据、不写 Collie；bridge 中断时保留 UI 已有 transcript，并显示读取错误。
+- daemon 不保存 bridge 数据，不修改 Collie 安装文件；写入仅通过 bridge 的 `/reply` API。bridge 中断时保留 UI 已有 transcript，并显示读取错误。

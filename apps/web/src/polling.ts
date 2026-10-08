@@ -19,7 +19,8 @@ export function startSerialPolling(
     }, delayMs);
   };
   const run = () => {
-    void Promise.resolve().then(poll).then(scheduleNext, scheduleNext);
+    if (stopped) return;
+    void Promise.resolve().then(() => stopped ? undefined : poll()).then(scheduleNext, scheduleNext);
   };
 
   run();
@@ -27,5 +28,28 @@ export function startSerialPolling(
     stopped = true;
     if (timerId !== null) cancel(timerId);
     timerId = null;
+  };
+}
+
+export interface AbortablePollingSession {
+  readonly controller: AbortController;
+  stop(): void;
+}
+
+/** Own one pane's poll timer and request lifetime as a single disposable session. */
+export function startAbortableSerialPolling(
+  poll: (signal: AbortSignal) => Promise<void>,
+  delayMs: number,
+  schedule?: Schedule,
+  cancel?: Cancel,
+): AbortablePollingSession {
+  const controller = new AbortController();
+  const stopPolling = startSerialPolling(() => poll(controller.signal), delayMs, schedule, cancel);
+  return {
+    controller,
+    stop() {
+      controller.abort();
+      stopPolling();
+    },
   };
 }

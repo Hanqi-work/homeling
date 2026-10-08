@@ -80,7 +80,7 @@ describe("checkAccess — loopback trust", () => {
 describe("checkAccess — Host allowlist", () => {
   test("tailscale hostname and loopback hosts pass", () => {
     for (const host of [`${TAILNET_HOST}:443`, TAILNET_HOST, "localhost:8790", "127.0.0.1:8790", "[::1]:8790"]) {
-      const r = checkAccess(req({ remoteAddress: "127.0.0.1", host }), cfg());
+      const r = checkAccess(req({ remoteAddress: "127.0.0.1", host, login: "me@github.com" }), cfg());
       expect(r.ok).toBe(true);
     }
   });
@@ -132,6 +132,33 @@ describe("checkAccess — same-origin (CSRF)", () => {
       cfg(),
     );
     expect(r.ok).toBe(false);
+  });
+
+  test("loopback Host does not make a foreign Origin same-origin for writes", () => {
+    const r = checkAccess(
+      req({
+        remoteAddress: "127.0.0.1",
+        host: "localhost:8790",
+        origin: "https://evil.example.com",
+        method: "POST",
+      }),
+      cfg(),
+    );
+    expect(r).toEqual({ ok: false, reason: "cross-origin rejected" });
+  });
+
+  test("reverse-proxy loopback peer with a tailscale Host is not trusted as a local caller", () => {
+    const noOrigin = checkAccess(
+      req({ remoteAddress: "127.0.0.1", host: `${TAILNET_HOST}:443`, method: "POST" }),
+      cfg(),
+    );
+    expect(noOrigin).toEqual({ ok: false, reason: "origin required" });
+
+    const noIdentity = checkAccess(
+      req({ remoteAddress: "127.0.0.1", host: `${TAILNET_HOST}:443`, origin: `https://${TAILNET_HOST}`, method: "POST" }),
+      cfg(),
+    );
+    expect(noIdentity).toEqual({ ok: false, reason: "identity required" });
   });
 
   test("write without Origin from non-loopback Host is rejected", () => {

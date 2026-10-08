@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { historyReducer, initialHistoryState, type HistoryState } from "./history-reducer.ts";
+import { historyReducer, initialHistoryState, optimisticEntries, type HistoryState } from "./history-reducer.ts";
 import type { TranscriptEntry } from "@homeling/contracts";
 
-const entry = (uuid: string, ts: string, text: string): TranscriptEntry => ({
+const entry = (uuid: string, ts: string, text: string, role: TranscriptEntry["role"] = "assistant"): TranscriptEntry => ({
   uuid,
   ts,
-  role: "assistant",
+  role,
   parts: [{ kind: "text", text }],
 });
 
@@ -119,6 +119,209 @@ describe("historyReducer", () => {
     expect(state.beforeCursor).toBeNull();
     expect(state.hasMore).toBe(false);
     expect(state.requestId).toBe(3);
+  });
+
+  test("keeps optimistic messages across stale and empty history snapshots", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-1", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1, entries: [], hasMore: false,
+    });
+    expect(state.outgoing).toEqual([{
+      id: "optimistic-1", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"), attemptOrder: 0, status: "pending",
+    }]);
+    expect(optimisticEntries(state)).toEqual([{
+      uuid: "optimistic-1", ts: "2026-10-01T00:00:01.000Z", role: "user", parts: [{ kind: "text", text: "hello" }],
+    }]);
+  });
+
+  test("confirms only matching user text with a timestamp at or after send time", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-1", text: "hello", sentAt: Date.parse("2026-10-01T00:00:02Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1, entries: [
+        entry("old", "2026-10-01T00:00:01Z", "hello", "user"),
+        entry("wrong-text", "2026-10-01T00:00:03Z", "other", "user"),
+      ],
+    });
+    expect(state.outgoing[0]?.status).toBe("pending");
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 2, entries: [
+        entry("old", "2026-10-01T00:00:01Z", "hello", "user"),
+        entry("right", "2026-10-01T00:00:03Z", "hello", "user"),
+      ],
+    });
+    expect(state.outgoing[0]).toMatchObject({ status: "sent", matchedUuid: "right" });
+  });
+
+  test("matches repeated identical sends to distinct history entries in FIFO order", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-1", text: "same", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-2", text: "same", sentAt: Date.parse("2026-10-01T00:00:02Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1, entries: [
+        entry("user-1", "2026-10-01T00:00:02Z", "same", "user"),
+        entry("user-2", "2026-10-01T00:00:03Z", "same", "user"),
+      ],
+    });
+    expect(state.outgoing.map(({ status, matchedUuid }) => [status, matchedUuid])).toEqual([
+      ["sent", "user-1"], ["sent", "user-2"],
+    ]);
+  });
+
+  test("remembers partial text delivery across submit-only retry failures", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-stable", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, { type: "outgoing-failed", paneId: "pane-a", id: "optimistic-stable", textDelivered: true });
+    state = historyReducer(state, { type: "outgoing-retry", paneId: "pane-a", id: "optimistic-stable" });
+    state = historyReducer(state, { type: "outgoing-failed", paneId: "pane-a", id: "optimistic-stable", textDelivered: false });
+    expect(state.outgoing[0]).toMatchObject({ status: "failed", textDelivered: true });
+  });
+
+  test("does not treat an abandoned transcript entry as delivery confirmation", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-1", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1,
+      entries: [{ ...entry("rewound", "2026-10-01T00:00:02Z", "hello", "user"), abandoned: true }],
+    });
+    expect(state.outgoing[0]?.status).toBe("pending");
+    expect(optimisticEntries(state)).toHaveLength(1);
+  });
+
+  test("marks a failure without a server delivery signal as unknown", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-unknown", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "outgoing-failed", paneId: "pane-a", id: "optimistic-unknown", textDelivered: null,
+    });
+    expect(state.outgoing[0]).toMatchObject({ status: "failed", deliveryUnknown: true });
+    state = historyReducer(state, { type: "outgoing-retry", paneId: "pane-a", id: "optimistic-unknown" });
+    state = historyReducer(state, {
+      type: "outgoing-failed", paneId: "pane-a", id: "optimistic-unknown", textDelivered: false,
+    });
+    expect(state.outgoing[0]).toMatchObject({ status: "failed", deliveryUnknown: true });
+  });
+
+  test("a late reply failure cannot undo history confirmation or re-enable retry", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-stable", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1,
+      entries: [entry("confirmed", "2026-10-01T00:00:02Z", "hello", "user")],
+    });
+    const confirmed = state.outgoing[0];
+    state = historyReducer(state, {
+      type: "outgoing-failed", paneId: "pane-a", id: "optimistic-stable", textDelivered: true,
+    });
+    expect(state.outgoing[0]).toBe(confirmed);
+    expect(state.outgoing[0]).toMatchObject({ status: "sent", matchedUuid: "confirmed" });
+  });
+
+  test("delivery confirmation is consumed monotonically in outgoing order", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-a", text: "A", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-b", text: "B", sentAt: Date.parse("2026-10-01T00:00:02Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1, entries: [
+        entry("history-b-early", "2026-10-01T00:00:03Z", "B", "user"),
+        entry("history-a", "2026-10-01T00:00:04Z", "A", "user"),
+      ],
+    });
+    expect(state.outgoing.map(({ status, matchedUuid }) => [status, matchedUuid])).toEqual([
+      ["sent", "history-a"], ["pending", undefined],
+    ]);
+
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 2, entries: [
+        entry("history-b-early", "2026-10-01T00:00:03Z", "B", "user"),
+        entry("history-a", "2026-10-01T00:00:04Z", "A", "user"),
+        entry("history-b-later", "2026-10-01T00:00:05Z", "B", "user"),
+      ],
+    });
+    expect(state.outgoing.map(({ matchedUuid }) => matchedUuid)).toEqual(["history-a", "history-b-later"]);
+  });
+
+  test("a queued retry can still confirm delivery from its earlier attempt", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-a", text: "A", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "outgoing-failed", paneId: "pane-a", id: "optimistic-a", textDelivered: null,
+    });
+    state = historyReducer(state, { type: "outgoing-retry", paneId: "pane-a", id: "optimistic-a" });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1,
+      entries: [entry("history-a", "2026-10-01T00:00:02Z", "A", "user")],
+    });
+    expect(state.outgoing[0]).toMatchObject({ status: "sent", matchedUuid: "history-a", deliveryUnknown: false });
+  });
+
+  test("a retry is matched in its latest attempt order, not creation order", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-a", text: "A", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, {
+      type: "outgoing-failed", paneId: "pane-a", id: "optimistic-a", textDelivered: false,
+    });
+    state = historyReducer(state, {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-b", text: "B", sentAt: Date.parse("2026-10-01T00:00:02Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1,
+      entries: [entry("history-b", "2026-10-01T00:00:03Z", "B", "user")],
+    });
+    state = historyReducer(state, {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-c", text: "C", sentAt: Date.parse("2026-10-01T00:00:04Z"),
+    });
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 2,
+      entries: [
+        entry("history-b", "2026-10-01T00:00:03Z", "B", "user"),
+        entry("history-c", "2026-10-01T00:00:05Z", "C", "user"),
+      ],
+    });
+    state = historyReducer(state, { type: "outgoing-retry", paneId: "pane-a", id: "optimistic-a" });
+    const reorderedHistory = [
+      entry("history-b", "2026-10-01T00:00:03Z", "B", "user"),
+      entry("history-c", "2026-10-01T00:00:05Z", "C", "user"),
+      entry("history-a", "2026-10-01T00:00:06Z", "A", "user"),
+    ];
+    state = historyReducer(state, { type: "received", paneId: "pane-a", requestId: 3, entries: reorderedHistory });
+    expect(state.outgoing.map(({ status, matchedUuid }) => [status, matchedUuid])).toEqual([
+      ["pending", undefined], ["sent", "history-b"], ["sent", "history-c"],
+    ]);
+    state = historyReducer(state, {
+      type: "outgoing-attempt-started", paneId: "pane-a", id: "optimistic-a", attemptOrder: 4,
+    });
+    state = historyReducer(state, { type: "received", paneId: "pane-a", requestId: 4, entries: reorderedHistory });
+    expect(state.outgoing.map(({ id, status, matchedUuid }) => [id, status, matchedUuid])).toEqual([
+      ["optimistic-a", "sent", "history-a"],
+      ["optimistic-b", "sent", "history-b"],
+      ["optimistic-c", "sent", "history-c"],
+    ]);
+  });
+
+  test("failure and retry keep the original optimistic ID", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "optimistic-stable", text: "hello", sentAt: Date.parse("2026-10-01T00:00:01Z"),
+    });
+    state = historyReducer(state, { type: "outgoing-failed", paneId: "pane-a", id: "optimistic-stable", textDelivered: false });
+    expect(state.outgoing[0]?.status).toBe("failed");
+    state = historyReducer(state, { type: "outgoing-retry", paneId: "pane-a", id: "optimistic-stable" });
+    expect(state.outgoing[0]).toMatchObject({ id: "optimistic-stable", status: "pending" });
   });
 
   test("retains paging and truncation metadata across tail refreshes", () => {
