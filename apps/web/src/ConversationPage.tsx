@@ -3,15 +3,17 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { mergeTranscripts, transcriptToMessages, type PaneHistoryResponse } from "@homeling/contracts";
+import { mapTaskStatuses, mergeTranscripts, transcriptToMessages, type Launcher, type PaneHistoryResponse, type SnapshotResponse, type Task } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
 import { Link, useParams } from "react-router";
-import { fetchPaneHistory, ReplyRequestError, sendPaneReply } from "./api.ts";
+import { fetchLaunchers, fetchPaneHistory, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply } from "./api.ts";
 import { toAssistantMessages } from "./assistant-messages.ts";
 import { ConversationMessage } from "./ConversationMessage.tsx";
 import { historyReducer, initialHistoryState, optimisticEntries, reconcileOutgoing, type HistoryAction, type OutgoingMessage } from "./history-reducer.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 import { ReplyComposer } from "./ReplyComposer.tsx";
+import { TaskChip } from "./TaskChip.tsx";
+import { readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
 type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
@@ -34,6 +36,13 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   outgoingRef.current = history.outgoing;
   const confirmedMessageIds = useRef(new Set<string>());
   const [error, setError] = useState<string | null>(null);
+  const [launchers, setLaunchers] = useState<readonly Launcher[]>([]);
+  const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
+  const [tasks, setTasks] = useState<Task[]>(() => readConversationTasks(paneId));
+  const [launchOpen, setLaunchOpen] = useState(false);
+  const [selectedCommand, setSelectedCommand] = useState("");
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendBlocked, setSendBlocked] = useState(false);
@@ -110,6 +119,60 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
       session.stop();
     };
   }, [paneId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchLaunchers(controller.signal).then((response) => {
+      if (!controller.signal.aborted) {
+        setLaunchers(response.launchers);
+        setSelectedCommand((current) => current || response.launchers[0]?.command || "");
+      }
+    }).catch((err: unknown) => {
+      if (!controller.signal.aborted) setLaunchError(err instanceof Error ? err.message : "Unable to load launchers");
+    });
+    const session = startAbortableSerialPolling(async (signal) => {
+      try {
+        const next = await fetchSnapshot(signal);
+        if (!signal.aborted) setSnapshot((current) => current && current.ts > next.ts ? current : next);
+      } catch {
+        // Keep the last snapshot so an intermittent read does not erase task status.
+      }
+    }, 3000);
+    return () => {
+      controller.abort();
+      session.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    saveConversationTasks(paneId, tasks);
+  }, [paneId, tasks]);
+
+  const visibleTasks = useMemo(
+    () => snapshot ? mapTaskStatuses(tasks, snapshot) : tasks,
+    [snapshot, tasks],
+  );
+
+  async function launchSelectedTask(): Promise<void> {
+    const selected = launchers.find((launcher) => launcher.command === selectedCommand);
+    if (!selected || launching) return;
+    setLaunching(true);
+    setLaunchError(null);
+    try {
+      const result = await launchTask(selected, paneId);
+      setTasks((current) => [...current, {
+        paneId: result.pane.paneId,
+        launcher: selected,
+        createdAt: Date.now(),
+        status: "unknown",
+      }]);
+      setLaunchOpen(false);
+    } catch (err: unknown) {
+      setLaunchError(err instanceof Error ? err.message : "Launch failed");
+    } finally {
+      setLaunching(false);
+    }
+  }
 
   async function loadOlder(): Promise<void> {
     const cursor = history.beforeCursor;
@@ -210,6 +273,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
     onNew: async () => {},
   });
   const failedMessages = history.outgoing.filter((message) => message.status === "failed");
+  const launchErrorNotice = launchError ? <p className="mt-2 text-sm text-red-300" role="alert">{launchError}</p> : null;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -220,6 +284,40 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
           <p className="text-xs text-neutral-400" role="status">
             {error ?? (history.available === false ? "history unavailable" : "history polling · 2s")}
           </p>
+          <button
+            type="button"
+            onClick={() => { setLaunchOpen((open) => !open); setLaunchError(null); }}
+            disabled={launchers.length === 0}
+            className="mt-3 min-h-11 rounded-xl border border-green-800 px-4 py-2 text-sm text-green-200 disabled:opacity-50"
+          >
+            派任务
+          </button>
+          {launchOpen ? (
+            <form
+              className="mt-3 rounded-xl border border-neutral-700 bg-neutral-900 p-3"
+              onSubmit={(event) => { event.preventDefault(); void launchSelectedTask(); }}
+            >
+              <label htmlFor="task-launcher" className="mb-2 block text-sm text-neutral-200">选择启动任务</label>
+              <select
+                id="task-launcher"
+                value={selectedCommand}
+                onChange={(event) => setSelectedCommand(event.currentTarget.value)}
+                disabled={launching}
+                className="min-h-11 w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 text-sm"
+              >
+                {launchers.map((launcher) => (
+                  <option key={launcher.command} value={launcher.command}>{launcher.label}</option>
+                ))}
+              </select>
+              {launchErrorNotice}
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => setLaunchOpen(false)} disabled={launching} className="min-h-11 rounded-lg px-4 text-sm text-neutral-300">取消</button>
+                <button type="submit" disabled={!selectedCommand || launching} className="min-h-11 rounded-lg bg-green-800 px-4 text-sm text-white disabled:opacity-50">
+                  {launching ? "正在启动…" : "确认派出"}
+                </button>
+              </div>
+            </form>
+          ) : launchErrorNotice}
         </header>
         <ThreadPrimitive.Root className="flex flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex flex-col gap-3 pb-8">
@@ -244,6 +342,11 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
               </p>
             </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
+            {visibleTasks.length > 0 ? (
+              <ul aria-label="任务" className="mt-2 flex flex-col gap-2">
+                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} />)}
+              </ul>
+            ) : null}
           </ThreadPrimitive.Viewport>
           {failedMessages.length > 0 ? (
             <section aria-label="发送失败的消息" className="max-h-28 overflow-y-auto border-t border-neutral-800 py-2">

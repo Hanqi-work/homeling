@@ -48,8 +48,10 @@ export async function handleRequest(
   }
 
   const { pathname } = new URL(req.url);
-  const isReplyPost = req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/reply$/.test(pathname);
-  if (isReplyPost && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
+  const isWritePost = req.method === "POST" && (
+    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/reply$/.test(pathname)
+  );
+  if (isWritePost && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
     return new Response("cross-origin rejected\n", {
       status: 403,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -61,7 +63,7 @@ export async function handleRequest(
   }
 
   if (pathname.startsWith(BROWSER_API_PREFIX)) {
-    if (req.method === "POST" && !isReplyPost) {
+    if (req.method === "POST" && !isWritePost) {
       return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
     }
     if (req.method !== "GET" && req.method !== "POST") {

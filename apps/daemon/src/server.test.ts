@@ -77,6 +77,22 @@ describe("handleRequest — routing", () => {
     expect(response.headers.get("etag")).toBe("\"history-1\"");
   });
 
+  test("GET /lite/api/launchers proxies the bridge's allowlist rows", async () => {
+    let target = "";
+    const fetcher: BridgeFetch = async (input) => {
+      target = String(input);
+      return Response.json({ launchers: [{ command: "bun test", label: "Test" }], home: "/home/test" });
+    };
+    const response = await handleRequest(
+      req({ remoteAddress: "127.0.0.1", host: "localhost:8790", path: "/lite/api/launchers" }),
+      CFG,
+      fetcher,
+    );
+    expect(response.status).toBe(200);
+    expect(target).toBe(`${CFG.bridgeOrigin}/api/launchers`);
+    expect(await response.json()).toEqual({ launchers: [{ command: "bun test", label: "Test" }], home: "/home/test" });
+  });
+
   test("proxy rejects writes and paths outside the narrow allowlist", async () => {
     let calls = 0;
     const fetcher: BridgeFetch = async () => { calls += 1; return Response.json({}); };
@@ -86,6 +102,37 @@ describe("handleRequest — routing", () => {
     expect(write.status).toBe(405);
     expect(forbidden.status).toBe(404);
     expect(calls).toBe(0);
+  });
+
+  test("POST launch uses same-origin access checks and requires JSON", async () => {
+    const body = '{"command":"bun test","paneId":"w1:p2"}';
+    const forwarded: Array<{ url: string; body: string }> = [];
+    const fetcher: BridgeFetch = async (input, init) => {
+      forwarded.push({ url: String(input), body: await new Response(init?.body).text() });
+      return Response.json({ ok: true, pane: { paneId: "w2:p1" } });
+    };
+    const launch = { path: "/lite/api/launch", method: "POST", contentType: "application/json", body };
+    const accepted = await handleRequest(req({
+      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      origin: `https://${TAILSCALE_HOST}`, ...launch,
+    }), CFG, fetcher);
+    expect(accepted.status).toBe(200);
+    expect(forwarded).toEqual([{ url: `${CFG.bridgeOrigin}/api/launch`, body }]);
+
+    const noOrigin = await handleRequest(req({
+      remoteAddress: "100.64.0.9", host: `${TAILSCALE_HOST}:443`, login: "me@github.com",
+      ...launch,
+    }), CFG, fetcher);
+    expect(noOrigin.status).toBe(403);
+    const proxyPeerNoOrigin = await handleRequest(req({
+      remoteAddress: "127.0.0.1", host: `${TAILSCALE_HOST}:443`, login: "me@github.com", ...launch,
+    }), CFG, fetcher);
+    expect(proxyPeerNoOrigin.status).toBe(403);
+    const wrongMediaType = await handleRequest(req({
+      remoteAddress: "127.0.0.1", host: "localhost:8790", ...launch, contentType: "text/plain",
+    }), CFG, fetcher);
+    expect(wrongMediaType.status).toBe(415);
+    expect(forwarded).toHaveLength(1);
   });
 
   test("POST reply uses same-origin access checks before proxying", async () => {

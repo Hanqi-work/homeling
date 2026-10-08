@@ -31,7 +31,7 @@ Collie/herdr 的顶层分组。与 persona 一一对应。
 Collie/herdr 的 tab，在 persona 详情页呈现为"项目"分组（默认折叠）。与 tab 一一对应。
 
 **task**
-persona 的一次性工作 = 一个新 pane 里的 agent 会话。在对话流中渲染为任务 chip，展开为任务详情页。与 pane 一一对应。
+persona 的一次性工作 = 一个新 pane 里的 agent 会话。在对话流中渲染为任务 chip，展开为任务详情页。与 pane 一一对应；稳定 ID 使用 bridge 返回的 `paneId`。
 
 **thread（主对话）**
 用户与一个 persona 的日常对话 = 该 persona 专属的一个**长期常驻主 pane**（区别于派任务的短期 task pane）。N 个 persona 即 N 个主 pane；每个 persona 恰有一个，经 daemon 创建与寻址。
