@@ -4,6 +4,8 @@
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import { dirname, join } from "node:path";
+import { ActivityLedger } from "./activity-ledger.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
@@ -27,6 +29,7 @@ function personaRuntime(cfg: DaemonConfig, fetcher: BridgeFetch): PersonaRuntime
       cfg,
       fetcher,
       registry: new PersonaRegistry(cfg.registryPath),
+      activity: new ActivityLedger(cfg.activityPath ?? join(dirname(cfg.registryPath), "activity.json")),
       herdr: new HerdrSocketClient({ socketPath: cfg.herdrSocketPath }),
     };
     personaRuntimes.set(cfg, runtime);
@@ -114,6 +117,28 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, fetcher);
+  const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
+  const occurrenceMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)$/);
+  if (activityMatch || occurrenceMatch) {
+    if (req.method !== "GET") return Response.json({ error: "method not allowed" }, { status: 405, headers: { allow: "GET" } });
+    if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
+    try {
+      if (activityMatch) {
+        const id = decodeURIComponent(activityMatch[1]!);
+        const activity = await runtime.activity.list(id);
+        if (activity.occurrences.length === 0 && !await runtime.registry.get(id)) return Response.json({ error: "persona not found" }, { status: 404 });
+        return Response.json(activity, { headers: { "cache-control": "no-store" } });
+      }
+      const key = decodeURIComponent(occurrenceMatch![1]!);
+      const activity = await runtime.activity.list();
+      const occurrence = activity.occurrences.find((item) => item.occurrenceKey === key);
+      if (!occurrence) return Response.json({ error: "task occurrence not found" }, { status: 404 });
+      const current = (await runtime.activity.ownership(occurrence.paneId))?.occurrenceKey === key;
+      return Response.json({ occurrence, current }, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Activity unavailable" }, { status: 502 });
+    }
+  }
   if (pathname === `${API_PERSONA_PATH}/list` && req.method === "GET") {
     try {
       return Response.json({ personas: await listPersonas(runtime) });

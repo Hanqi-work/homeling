@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { ActivityEvent, ActivityResponse, TaskOccurrence } from "@homeling/contracts";
 import type { MutationAdmission } from "./session-lock.ts";
 import type { SystemAdmission } from "./system-admission.ts";
+import type { TaskResultAdmission } from "./mutation-result.ts";
 
 interface LedgerState {
   version: 1;
@@ -85,7 +86,8 @@ export class ActivityLedger {
     return [...occurrences].reverse().find((occurrence) => occurrence.paneId === paneId);
   }
 
-  register(input: { personaId: string; spaceId: string; paneId: string; title: string }, admission: MutationAdmission): Promise<TaskOccurrence> {
+  register(input: { personaId: string; spaceId: string; paneId: string; title: string }, admission: MutationAdmission | TaskResultAdmission): Promise<TaskOccurrence> {
+    if ("scope" in admission && (admission.scope !== "task.result" || !("resourceId" in admission) || admission.resourceId !== input.paneId)) return Promise.reject(new Error("Task registration requires user admission or its exact dispatched pane result"));
     return this.commit(admission, (state) => {
       const current = [...state.occurrences].reverse().find((item) => item.paneId === input.paneId);
       if (current && (current.personaId !== input.personaId || current.spaceId !== input.spaceId)) throw new Error("Task ownership cannot be reassigned");
@@ -139,6 +141,7 @@ export class ActivityLedger {
   }
 
   fail(occurrenceKey: string, reason: string, admission: MutationAdmission): Promise<void> {
+    if ("scope" in admission) return Promise.reject(new Error("Launch failure registration requires the original user admission"));
     return this.commit(admission, (state) => {
       const occurrence = state.occurrences.find((item) => item.occurrenceKey === occurrenceKey);
       if (occurrence) this.settle(state, occurrence, "failed", "daemon.launch", reason);
