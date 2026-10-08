@@ -21,7 +21,7 @@ describe("ReplyComposer", () => {
   test("locks the composer when a previous input is awaiting a safe retry", () => {
     const markup = renderToStaticMarkup(<ReplyComposer draft="draft" onDraftChange={() => {}} onSend={() => {}} disabled />);
     expect(markup).toContain("请先重试尚未确认的消息");
-    expect(markup.match(/disabled=""/g)?.length).toBe(5);
+    expect(markup.match(/disabled=""/g)?.length).toBe(6);
   });
 
   test("quick replies fill the draft without sending", () => {
