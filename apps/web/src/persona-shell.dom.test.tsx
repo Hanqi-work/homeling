@@ -126,7 +126,7 @@ test("unknown deletion stays visible across empty-list polling and a later locke
     if (init?.method === "DELETE") {
       writes++;
       if (writes === 1) throw new Error("connection lost");
-      return Response.json({ error: "Session locked" }, { status: 423 });
+      return Response.json({ error: "Session locked", code: "session.locked", executed: false, deliveryUnknown: false }, { status: 423 });
     }
     if (String(url).endsWith("persona/list")) return Response.json({ personas: writes > 0 ? [] : [persona] });
     return Response.json({ paneId: "p", available: false, reason: "no-log" });

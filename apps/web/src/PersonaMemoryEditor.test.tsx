@@ -74,6 +74,30 @@ async function reload() {
 function saveDisabled(kind = "facts") { return form(kind).querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled; }
 
 describe("persona memory editor public UI and fetch seam", () => {
+  test("a bare 423 without explicit non-dispatch evidence stays unknown", async () => {
+    const f = fake(response(), response({}, 423));
+    await mount(f.fetcher);
+    await edit("facts", "Keep this draft");
+    await submit("facts");
+    expect(container.textContent).toContain("保存结果未知");
+    expect(saveDisabled()).toBe(true);
+    expect(textarea("facts").value).toBe("Keep this draft");
+  });
+  test("an interrupted 423 with dispatched or unknown outcome is not mislabeled as a zero-effect refusal", async () => {
+    const f = fake(response(), response({ code: "session.interrupted", executed: true, deliveryUnknown: true }, 423), response());
+    await mount(f.fetcher);
+    await edit("facts", "不重放此草稿");
+    await submit("facts");
+    expect(container.textContent).toContain("保存结果未知");
+    expect(container.textContent).not.toContain("保存被拒绝");
+    expect(saveDisabled()).toBe(true);
+    await submit("facts");
+    expect(f.calls).toHaveLength(2);
+    expect(textarea("facts").value).toBe("不重放此草稿");
+    await reload();
+    expect(f.calls).toHaveLength(3);
+    expect(textarea("facts").value).toBe("不重放此草稿");
+  });
   test("a parent rerender with a new fetcher cannot silently clear sticky unknown or overwrite drafts", async () => {
     const first = fake(response(), new Error("lost response"));
     const replacement = fake(response());
@@ -202,7 +226,7 @@ describe("persona memory editor public UI and fetch seam", () => {
     });
   }
   test("423 reports a locked rejection, retains drafts, and never automatically replays the save", async () => {
-    const f = fake(response(), response({}, 423), response());
+    const f = fake(response(), response({ code: "session.locked", executed: false, deliveryUnknown: false }, 423), response());
     await mount(f.fetcher);
     await edit("project", "锁定时的草稿");
     await submit("project");

@@ -33,7 +33,7 @@ function parseMemory(value: unknown): PersonaMemory {
 }
 
 export class MemoryRequestError extends Error {
-  constructor(public readonly status: number) { super(`Memory request failed (${status})`); }
+  constructor(public readonly status: number, public readonly deliveryUnknown = false) { super(`Memory request failed (${status})`); }
 }
 
 export async function getPersonaMemory(personaId: string, fetcher: MemoryFetcher = memoryFetch): Promise<PersonaMemory> {
@@ -46,6 +46,11 @@ export async function putPersonaMemory(personaId: string, document: { kind: Memo
   const response = await fetcher(`/lite/api/persona/${encodeURIComponent(personaId)}/memory`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document),
   });
-  if (!response.ok) throw new MemoryRequestError(response.status);
+  if (!response.ok) {
+    const outcome = await response.json().catch(() => null) as { deliveryUnknown?: unknown; executed?: unknown } | null;
+    const deliveryUnknown = outcome?.deliveryUnknown === true || outcome?.executed === true ||
+      (response.status === 423 && !(outcome?.executed === false && outcome?.deliveryUnknown === false));
+    throw new MemoryRequestError(response.status, deliveryUnknown);
+  }
   return parseMemory(await response.json());
 }

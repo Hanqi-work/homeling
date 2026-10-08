@@ -86,10 +86,11 @@ function MemoryEditor({ personaId, fetcher = memoryFetch }: PersonaMemoryEditorP
     } catch (error) {
       if (token !== generation.current) return;
       transition("blocked");
-      unknownSave.current = !(error instanceof MemoryRequestError && (error.status === 409 || error.status === 423));
-      setMessage(error instanceof MemoryRequestError && error.status === 409
+      const definiteFailure = error instanceof MemoryRequestError && !error.deliveryUnknown;
+      unknownSave.current = !(definiteFailure && (error.status === 409 || error.status === 423));
+      setMessage(definiteFailure && error.status === 409
         ? "版本冲突，草稿已保留；请重新加载后核对并显式保存。"
-        : error instanceof MemoryRequestError && error.status === 423
+        : definiteFailure && error.status === 423
           ? "记忆已锁定，保存被拒绝；草稿已保留，不会自动重放。请重新加载后再显式保存。"
           : "保存结果未知，草稿已保留；请重新加载核对后再保存。");
     }
