@@ -50,7 +50,7 @@ export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetail
         setError({ key: deletionUnknown.current ? "personaDetail.deletionNotDispatchedStillUnconfirmed" : "personaDetail.deletionNotDispatched" });
       } else {
         deletionUnknown.current = true;
-        setError({ key: "personaDetail.deletionUnknown", params: { error: error instanceof Error ? error.message : t("personaDetail.deletionFailed") } });
+        setError({ key: "personaDetail.deletionUnknown", params: { error: error instanceof Error ? error.message : "" } });
       }
     } finally { inFlight.current = false; setDeleting(false); }
   }
@@ -69,7 +69,7 @@ export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetail
           : <button type="button" onClick={() => setConfirming(true)} className={`${action} w-full text-rose-300`}>{t("personaDetail.deleteNamed", { name: persona.name })}</button>}
       </section>
     </> : <Link to="/" className={action}>{t("persona.backHome")}</Link>}
-    {error ? <p role="alert" className="mt-4 text-sm text-rose-300">{t(error.key, error.params)}</p> : null}
+    {error ? <p role="alert" className="mt-4 text-sm text-rose-300">{t(error.key, error.key === "personaDetail.deletionUnknown" ? { ...error.params, error: error.params?.error || t("personaDetail.deletionFailed") } : error.params)}</p> : null}
   </section>;
 }
 

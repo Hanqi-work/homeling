@@ -39,6 +39,18 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("fallback deletion failure is translated at render time, not frozen in the old locale", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  sessionState.apply({ locked: false, epoch: 1, generation: "locale-delete" }); sessionState.caughtUp();
+  globalThis.fetch = (async () => { throw "non-error failure"; }) as typeof fetch;
+  const persona = { id: "m", name: "Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", systemPrompt: "", createdAt: "2026-10-08", status: "idle" as const };
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><MemoryRouter><PersonaDetailContent persona={persona} /></MemoryRouter></LocaleProvider>));
+  for (const label of ["Delete Mira", "Confirm deletion"]) await act(async () => [...container.querySelectorAll("button")].find((item) => item.textContent === label)!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const select = container.querySelector<HTMLSelectElement>("#homeling-language")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Löschen fehlgeschlagen");
+  expect(container.querySelector('[role="alert"]')?.textContent).not.toContain("Deletion failed");
+});
 test("avatar unknown-save warning and control labels translate without changing protocol values, name draft or replaying", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   sessionState.apply({ locked: false, epoch: 1, generation: "locale-avatar" }); sessionState.caughtUp();
