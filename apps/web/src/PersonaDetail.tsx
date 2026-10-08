@@ -1,3 +1,5 @@
+import { useLocale } from "./locale.tsx";
+type LocalizedCopy = { key: string; params?: Record<string, string | number> };
 import type { PersonaView } from "@homeling/contracts";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -20,10 +22,11 @@ interface PersonaDetailProps {
 }
 
 export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetailContentProps): ReactElement {
+  const { t } = useLocale();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalizedCopy | null>(null);
   const [removed, setRemoved] = useState(false);
   const inFlight = useRef(false);
   const deletionUnknown = useRef(false);
@@ -35,38 +38,38 @@ export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetail
     try {
       const outcome = await deletePersona(persona.id);
       if (!outcome.deleted) {
-        setError(`This attempt did not confirm deletion. Check the persona’s current state before retrying.${deletionUnknown.current ? " The previous deletion remains unconfirmed and may have partially completed; check Homelings and the main pane before retrying." : ""}`);
+        setError({ key: deletionUnknown.current ? "personaDetail.deletionStillUnconfirmed" : "personaDetail.deletionUnconfirmed" });
         return;
       }
       setRemoved(true); setConfirming(false);
       setResult(outcome.archived
-        ? "Homeling deleted. Main pane closed; space archived and task panes retained."
-        : "Homeling deleted and main pane closed. Space and tasks are retained, but the archive rename failed. Check the retained space on this computer.");
+        ? "personaDetail.deletedArchived"
+        : "personaDetail.deletedArchiveFailed");
     } catch (error) {
       if (error instanceof PersonaDeleteError && error.notDispatched) {
-        setError(`Session locked. This deletion attempt was not dispatched. Unlock before explicitly retrying.${deletionUnknown.current ? " The previous deletion remains unconfirmed and may have partially completed; check Homelings and the main pane before retrying." : ""}`);
+        setError({ key: deletionUnknown.current ? "personaDetail.deletionNotDispatchedStillUnconfirmed" : "personaDetail.deletionNotDispatched" });
       } else {
         deletionUnknown.current = true;
-        setError(`${error instanceof Error ? error.message : "Deletion failed"}. Deletion may have partially completed; check Homelings and the main pane before retrying.`);
+        setError({ key: "personaDetail.deletionUnknown", params: { error: error instanceof Error ? error.message : t("personaDetail.deletionFailed") } });
       }
     } finally { inFlight.current = false; setDeleting(false); }
   }
   const base = `/persona/${encodeURIComponent(persona.id)}`;
   return <section>
-    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? "Deleted" : deleting ? "Deleting…" : error ? "Deletion needs checking" : personaStatusLabel(persona)}</p></div>
-    {result ? <p role="status" className="mb-5 rounded-xl border border-amber-800 p-4 text-sm text-amber-200">{result}</p> : null}
+    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? t("personaDetail.deleted") : deleting ? t("personaDetail.deleting") : error ? t("personaDetail.deletionNeedsChecking") : personaStatusLabel(persona, false, t)}</p></div>
+    {result ? <p role="status" className="mb-5 rounded-xl border border-amber-800 p-4 text-sm text-amber-200">{t(result)}</p> : null}
     {!removed ? <>
-      <h2 className="mb-3 text-sm font-medium text-neutral-400">Computers</h2>
-      <div className="mb-7 rounded-xl bg-neutral-900 p-4"><p className="font-medium">This computer</p><p className="mt-1 text-sm text-neutral-400">The local computer running Homeling · space {persona.spaceId}</p></div>
-      <nav aria-label="Persona entries" className="mb-8 flex flex-col gap-2">{[["", "Open conversation"], ["/memory", "Memory"], ["/activity", "Activity"], ["/customize", "Customize"]].map(([suffix, label]) => <Link key={suffix} to={`${base}${suffix}`} className={action}>{label}<span aria-hidden="true">→</span></Link>)}</nav>
+      <h2 className="mb-3 text-sm font-medium text-neutral-400">{t("personaDetail.computers")}</h2>
+      <div className="mb-7 rounded-xl bg-neutral-900 p-4"><p className="font-medium">{t("personaDetail.thisComputer")}</p><p className="mt-1 text-sm text-neutral-400">{t("personaDetail.localComputer", { spaceId: persona.spaceId })}</p></div>
+      <nav aria-label={t("personaDetail.entries")} className="mb-8 flex flex-col gap-2">{[["", t("personaDetail.openConversation")], ["/memory", t("personaDetail.memory")], ["/activity", t("personaDetail.activity")], ["/customize", t("personaDetail.customize")]].map(([suffix, label]) => <Link key={suffix} to={`${base}${suffix}`} className={action}>{label}<span aria-hidden="true">→</span></Link>)}</nav>
       <section aria-labelledby="delete-persona-title" className="border-t border-neutral-800 pt-5">
-        <h2 id="delete-persona-title" className="mb-2 font-medium">Delete Homeling</h2>
-        <p className="mb-4 text-sm leading-relaxed text-neutral-400">Deleting closes the main conversation pane and removes this Homeling. Its space is retained as an archive. Task panes keep running and are not deleted. Archive rename failures are reported separately.</p>
-        {confirming ? <div className="rounded-xl border border-rose-900 p-4"><p className="mb-3 text-sm">Close {persona.name}’s main pane and delete this Homeling?</p><div className="flex gap-3"><button type="button" onClick={() => void remove()} disabled={deleting} className={`${action} text-rose-300 disabled:opacity-50`}>{deleting ? "Deleting…" : "Confirm deletion"}</button><button type="button" disabled={deleting} onClick={() => setConfirming(false)} className={action}>Cancel</button></div></div>
-          : <button type="button" onClick={() => setConfirming(true)} className={`${action} w-full text-rose-300`}>Delete {persona.name}</button>}
+        <h2 id="delete-persona-title" className="mb-2 font-medium">{t("personaDetail.deleteTitle")}</h2>
+        <p className="mb-4 text-sm leading-relaxed text-neutral-400">{t("personaDetail.deleteExplanation")}</p>
+        {confirming ? <div className="rounded-xl border border-rose-900 p-4"><p className="mb-3 text-sm">{t("personaDetail.deleteConfirmation", { name: persona.name })}</p><div className="flex gap-3"><button type="button" onClick={() => void remove()} disabled={deleting} className={`${action} text-rose-300 disabled:opacity-50`}>{deleting ? t("personaDetail.deleting") : t("personaDetail.confirmDeletion")}</button><button type="button" disabled={deleting} onClick={() => setConfirming(false)} className={action}>{t("common.cancel")}</button></div></div>
+          : <button type="button" onClick={() => setConfirming(true)} className={`${action} w-full text-rose-300`}>{t("personaDetail.deleteNamed", { name: persona.name })}</button>}
       </section>
-    </> : <Link to="/" className={action}>Back to Homelings</Link>}
-    {error ? <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p> : null}
+    </> : <Link to="/" className={action}>{t("persona.backHome")}</Link>}
+    {error ? <p role="alert" className="mt-4 text-sm text-rose-300">{t(error.key, error.params)}</p> : null}
   </section>;
 }
 
@@ -76,12 +79,13 @@ export function PersonaDetail(props: PersonaDetailProps): ReactElement {
 }
 
 function PersonaDetailView({ slots = {}, entry = "details" }: PersonaDetailProps): ReactElement {
+  const { t } = useLocale();
   const { personaId = "" } = useParams();
   const navigate = useNavigate();
   const dialog = useRef<HTMLDialogElement>(null);
   const deletionScope = useRef<string | null>(null);
   const [persona, setPersona] = useState<PersonaView | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalizedCopy | null>(null);
   useEffect(() => {
     const session = startAbortableSerialPolling(async (signal) => {
       if (deletionScope.current === personaId) return;
@@ -90,9 +94,9 @@ function PersonaDetailView({ slots = {}, entry = "details" }: PersonaDetailProps
         if (signal.aborted || deletionScope.current === personaId) return;
         const matchingPersona = result.personas.find((item) => item.id === personaId) ?? null;
         setPersona(matchingPersona);
-        setError(matchingPersona ? null : "Persona not found or already deleted");
+        setError(matchingPersona ? null : { key: "personaDetail.notFound" });
       } catch (error) {
-        if (!signal.aborted && deletionScope.current !== personaId) setError(error instanceof Error ? error.message : "Persona unavailable");
+        if (!signal.aborted && deletionScope.current !== personaId) setError(error instanceof Error ? { key: "personaDetail.loadError", params: { error: error.message } } : { key: "personaDetail.unavailable" });
       }
     }, 3000);
     return () => session.stop();
@@ -113,17 +117,17 @@ function PersonaDetailView({ slots = {}, entry = "details" }: PersonaDetailProps
     if (entry === "details") {
       body = <PersonaDetailContent key={persona.id} persona={persona} onDeleteStarted={() => { deletionScope.current = persona.id; }} />;
     } else {
-      body = <section><h1 className="mb-6 text-2xl font-semibold">{persona.name} · {entry}</h1>{slots[entry]?.(persona.id) ?? <p className="text-neutral-400">This feature is not enabled yet.</p>}</section>;
+      body = <section><h1 className="mb-6 text-2xl font-semibold">{persona.name} · {t(`personaDetail.${entry}`)}</h1>{slots[entry]?.(persona.id) ?? <p className="text-neutral-400">{t("personaDetail.featureNotEnabled")}</p>}</section>;
     }
   } else if (!error) {
-    body = <p role="status">Loading persona…</p>;
+    body = <p role="status">{t("personaDetail.loading")}</p>;
   }
 
   const content = <>
-    <Link to={entry === "details" ? "/" : `/persona/${encodeURIComponent(personaId)}/details`} className="mb-6 inline-block min-h-12 py-3 text-sm text-green-200">{entry === "details" ? "Close panel" : "Back to persona"}</Link>
-    {error ? <p role="alert" className="mb-4 text-sm text-rose-300">{error}</p> : null}
+    <Link to={entry === "details" ? "/" : `/persona/${encodeURIComponent(personaId)}/details`} className="mb-6 inline-block min-h-12 py-3 text-sm text-green-200">{entry === "details" ? t("personaDetail.closePanel") : t("personaDetail.backToPersona")}</Link>
+    {error ? <p role="alert" className="mb-4 text-sm text-rose-300">{t(error.key, error.params)}</p> : null}
     {body}
   </>;
   if (entry !== "details") return content;
-  return <dialog ref={dialog} aria-label="Persona details" onCancel={(event) => { event.preventDefault(); close(); }} onClick={(event) => { if (event.target === event.currentTarget) close(); }} className="fixed inset-0 m-0 ml-auto h-dvh max-h-dvh w-full max-w-lg overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-6 text-neutral-100 backdrop:bg-black/60"><div>{content}</div></dialog>;
+  return <dialog ref={dialog} aria-label={t("personaDetail.details")} onCancel={(event) => { event.preventDefault(); close(); }} onClick={(event) => { if (event.target === event.currentTarget) close(); }} className="fixed inset-0 m-0 ml-auto h-dvh max-h-dvh w-full max-w-lg overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-6 text-neutral-100 backdrop:bg-black/60"><div>{content}</div></dialog>;
 }

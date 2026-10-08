@@ -5,6 +5,8 @@ import type { Root } from "react-dom/client";
 import { LocaleProvider, useLocale, LanguageSettings } from "./locale.tsx";
 import { MemoryRouter } from "react-router";
 import { App } from "./App.tsx";
+import { ReplyComposer } from "./ReplyComposer.tsx";
+import { PersonaDetailContent } from "./PersonaDetail.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -28,6 +30,46 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("persona deletion confirmation changes language in place without changing the persona name", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const persona = { id: "mira", name: "Delete Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", systemPrompt: "", createdAt: "2026-10-08", status: "idle" as const };
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><MemoryRouter><PersonaDetailContent persona={persona} /></MemoryRouter></LocaleProvider>));
+  const button = [...container.querySelectorAll("button")].find((item) => item.textContent === "Delete Delete Mira")!;
+  await act(async () => button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "zh"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector("h1")?.textContent).toBe("Delete Mira");
+  expect(container.textContent).toContain("确认删除");
+  expect(container.textContent).toContain("关闭 Delete Mira 的主面板");
+});
+test("invalid saved locale falls back to English without crashing", async () => {
+  window.localStorage.setItem("homeling.locale", "not-a-locale");
+  await mount();
+  expect(container.querySelector("select")?.value).toBe("en");
+  expect(container.querySelector("p")?.textContent).toBe("Settings");
+});
+test("disabled storage keeps language usable and explicitly says the choice is not saved", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+  Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new Error("storage denied"); } });
+  try {
+    await mount();
+    const select = container.querySelector("select")!;
+    await act(async () => { select.value = "zh"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+    expect(container.querySelector("p")?.textContent).toBe("设置");
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("无法保存");
+  } finally { if (descriptor) Object.defineProperty(window, "localStorage", descriptor); else Reflect.deleteProperty(window, "localStorage"); }
+});
+test("composer chrome switches language without translating an existing user draft", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><ReplyComposer draft="Please continue" onDraftChange={() => {}} onSend={() => {}} /></LocaleProvider>));
+  const textarea = container.querySelector("textarea")!;
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "ja"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.textContent).toContain("送信");
+  expect(textarea.value).toBe("Please continue");
+  expect(container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.getAttribute("placeholder")).toBe("メッセージを入力…");
+});
 test("actual settings changes page and navigation without replacing other settings slots", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={["/settings"]}><App slots={{ settings: <button>Existing push and lock controls</button> }} /></MemoryRouter></LocaleProvider>));
