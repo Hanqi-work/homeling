@@ -34,6 +34,7 @@ export type {
   PersonaAvatar,
   PersonaListResponse,
   PersonaMessageRequest,
+  PersonaMemorySession,
   PersonaRecord,
   PersonaStatus,
   PersonaView,

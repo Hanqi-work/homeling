@@ -49,6 +49,12 @@ describe("daemonConfigFromEnv", () => {
     );
   });
 
+  test("memory uses a dedicated Homeling data directory with an explicit override", () => {
+    const c = daemonConfigFromEnv({ HOMELING_MEMORY_DIR: "/srv/homeling/memory" });
+    expect(c.memoryPath).toBe("/srv/homeling/memory");
+    expect(daemonConfigFromEnv({ HOMELING_DATA_DIR: "/srv/homeling" }).memoryPath).toBe("/srv/homeling/memory");
+  });
+
   test("registry and Herdr socket paths are configurable", () => {
     const c = daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: "/tmp/registry.json", HERDR_SOCKET_PATH: "/tmp/herdr.sock" });
     expect(c.registryPath).toBe("/tmp/registry.json");

@@ -299,6 +299,7 @@ test("triage consumes real daemon ledger ownership and scoped history, and the s
     await ledger.observe("pane_agent_status_changed", { pane_id: "owned-task", workspace_id: mira.spaceId, agent_status: "working" }, observer);
     calls.length = 0; upstreamCalls.length = 0;
     await act(async () => root.render(<MemoryRouter key="stale" initialEntries={[`/p/owned-task?occurrence=${occurrence.occurrenceKey}`]}>{routes}</MemoryRouter>));
+    await settleUntil(() => container.textContent?.includes("Recorded task") === true);
     expect(container.querySelector("textarea") !== null).toBe(false);
     expect(container.textContent).not.toContain("Owned task permission");
     expect(calls.some((path) => path.endsWith("requests") || path.endsWith("/history"))).toBe(false);

@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { AppRoot } from "./AppRoot.tsx";
 import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
+import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
+import { LocaleProvider } from "./locale.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
@@ -15,8 +17,15 @@ registerServiceWorker((handle) => {
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 createRoot(root).render(
-  <StrictMode><BrowserRouter basename="/lite"><AppRoot slots={{
-    homeSummary: <SessionAwareHomeTriage />,
-    activity: (personaId) => <Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading activity…</main>}><ActivityPanel personaId={personaId} /></Suspense>,
-  }} /></BrowserRouter></StrictMode>,
+  <StrictMode>
+    <LocaleProvider>
+      <BrowserRouter basename="/lite">
+        <AppRoot slots={{
+          homeSummary: <SessionAwareHomeTriage />,
+          memory: (personaId) => <PersonaMemoryEditor personaId={personaId} />,
+          activity: (personaId) => <Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading activity…</main>}><ActivityPanel personaId={personaId} /></Suspense>,
+        }} />
+      </BrowserRouter>
+    </LocaleProvider>
+  </StrictMode>,
 );

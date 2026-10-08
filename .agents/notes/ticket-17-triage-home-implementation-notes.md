@@ -11,6 +11,8 @@
 - task occurrence 使用 #13 durable ActivityResponse.occurrences append 顺序的最后同 pane 记录（不是时间戳，不倒退找旧 active）；再 GET activity/task/:key 全局权威确认 current/liveAvailable/live 及 UUID/pane/persona/space/active，未确认时保留计数并展示明确不可处理降级，不 fallback unscoped 写页。
 - 已显式 merge #13 scoped API green 5a5c50895c473c5ee0ccb2e233b5a4ad1db398dc（非整票 ready）；复用共享 fetchActivity/fetchTaskOccurrence/ActivityTaskResponse，删去临时同义 API helper。
 - #13/#19 合并冲突保留 scoped task 路径 + sessionMutationFetch、upstreamFetch/原 admission 派发门禁；保留 main Activity slot + AppRoot/SessionBoundary，不丢其他槽位。#13 Activity.interaction live 测试最小补 session ready fixture，非生产解锁。
+- 已仅在本票 workspace merge 最新 integration 61f909d49367ae4d68df5792905afb8aa82cbf57（#12）。保留 LocaleProvider/SessionBoundary/AppRoot 与 memory/activity/homeSummary 槽；daemon config 联合 memory/activity/push 字段、index memory+scoped Activity路由，control-key fixture 采用 integration 更严格缺 identity/origin 分支。
+- 普通独立 code-reviewer 增量审查融合冲突及组件：无新增高置信阻塞/非阻塞问题；已知 #15 /p guard 和 #13 scopedreply busy/controlgate 修后green为剩余依赖，不能自行偷补 daemon。
 - 复用串行轮询，隐藏页面停止并废弃在途响应；显式 suspended seam 供 #19 接线。所有请求仅 GET，不发送 activity/续 lease。
 - 已显式 merge #15 green 0a579bf8ff4b65b578569de81305d56b0467a2db（含 #13/#19 契约依赖，非 #15 整票 ready），消费 optional 真实 personaId registry resolver；未改审批 id/signature。
 - 显式 merge #19 actual root green d1c283cbe37ce2caa5a495ac72bb8525d3831266（非整票 ready）。main 保留 AppRoot/SessionBoundary 所有 Routes，只传 homeSummary SessionAwareHomeTriage。wrapper 消费 useSessionSnapshot，locked 或 !ready 时真实暂停，不仅 overlay。
