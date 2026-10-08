@@ -14,7 +14,12 @@ test('push subscriptions and preferences survive daemon restart', async () => {
     const { token } = lock.unlock('alice');
     await store.mutate(state => ({ next: { ...state, preferences: { enabled: false } }, result: undefined }), lock.admission(lock.admit(token, 'alice')));
     expect((await new PushStore(path).load()).preferences.enabled).toBe(false);
-    lock.lock(token, 'alice');
+    const admission = lock.admission(lock.admit(token, 'alice'));
+    await expect(store.mutate(state => {
+      lock.lock(token, 'alice');
+      return { next: { ...state, preferences: { enabled: true } }, result: undefined };
+    }, admission)).rejects.toBeInstanceOf(SessionLocked);
+    expect((await new PushStore(path).load()).preferences.enabled).toBe(false);
     expect(() => store.mutate(state => ({ next: { ...state, preferences: { enabled: true } }, result: undefined }), lock.admission({} as never))).toThrow(SessionLocked);
     expect((await new PushStore(path).load()).preferences.enabled).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }

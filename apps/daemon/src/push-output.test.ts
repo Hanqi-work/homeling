@@ -23,5 +23,10 @@ test('same occurrence sends once across restart, new occurrence can notify', asy
     expect(sent).toHaveLength(1);
     await make().send({ ...payload, occurrenceKey: 'instance-2' });
     expect(sent).toHaveLength(2);
+    const cancellable = make();
+    const queued = cancellable.send({ ...payload, tag: 'cancel-before-send', occurrenceKey: 'instance-3' });
+    await cancellable.retract('cancel-before-send');
+    expect((await queued).suppressed).toBe(1);
+    expect(sent).toHaveLength(2);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

@@ -1,4 +1,5 @@
 import type { BridgeFetch } from "./bridge-proxy.ts";
+import type { ActivityLedger } from "./activity-ledger.ts";
 import type { DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText } from "./control-key.ts";
 import { HerdrRpcError, type HerdrCreatedSpace, type HerdrPane, type HerdrPort, type HerdrSnapshot } from "./herdr-client.ts";
@@ -7,6 +8,7 @@ import { newPersonaId, PersonaRegistry, type Persona, type PersonaAvatar } from 
 
 export interface PersonaRuntime {
   readonly registry: PersonaRegistry;
+  readonly activity?: ActivityLedger;
   readonly herdr: HerdrPort;
   readonly cfg: DaemonConfig;
   readonly fetcher: BridgeFetch;
