@@ -1,4 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { renameSync } from "node:fs";
+import type { MutationAdmission } from "./session-lock.ts";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PersonaRecord } from "@homeling/contracts";
@@ -73,14 +75,14 @@ export class PersonaRegistry {
     return (await this.load()).personas.find((persona) => persona.id === id);
   }
 
-  async createPersona(persona: Persona): Promise<void> {
+  async createPersona(persona: Persona, admission?: MutationAdmission): Promise<void> {
     await this.mutate((registry) => {
       if (registry.personas.some((item) => item.id === persona.id)) throw new Error("persona id already exists");
       return { next: { ...registry, personas: [...registry.personas, persona] }, result: undefined };
-    });
+    }, admission);
   }
 
-  async patchPersona(id: string, patch: Partial<Persona>): Promise<Persona | undefined> {
+  async patchPersona(id: string, patch: Partial<Persona>, admission?: MutationAdmission): Promise<Persona | undefined> {
     return this.mutate((registry) => {
       const current = registry.personas.find((persona) => persona.id === id);
       if (!current) return { next: registry, result: undefined };
@@ -89,7 +91,7 @@ export class PersonaRegistry {
         next: { ...registry, personas: registry.personas.map((persona) => persona.id === id ? updated : persona) },
         result: updated,
       };
-    });
+    }, admission);
   }
 
   async removePersona(id: string, archive: ArchivedSpace): Promise<Persona | undefined> {
@@ -111,15 +113,17 @@ export class PersonaRegistry {
     await this.mutate((registry) => ({ next: { ...registry, orphans: [...registry.orphans, orphan] }, result: undefined }));
   }
 
-  private mutate<T>(change: (registry: RegistryFile) => { next: RegistryFile; result: T }): Promise<T> {
+  private mutate<T>(change: (registry: RegistryFile) => { next: RegistryFile; result: T }, admission?: MutationAdmission): Promise<T> {
     const write = this.writeTail.then(async () => {
+      admission?.assert();
       const registry = await this.load();
       const changed = change(registry);
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
       const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, `${JSON.stringify(changed.next, null, 2)}\n`, { mode: 0o600 });
-        await rename(temporary, this.path);
+        const commit = () => renameSync(temporary, this.path);
+        if (admission) admission.dispatch(commit); else commit();
         this.current = changed.next;
         return changed.result;
       } catch (error) {

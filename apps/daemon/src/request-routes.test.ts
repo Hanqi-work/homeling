@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { handleRequest } from "./index.ts";
+import { handleUnlockedRequest as handleRequest } from "./session-test-fixture.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 import { daemonConfigFromEnv } from "./config.ts";
 
 const permissionScreen = `Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend`;
 
 function request(path: string, options: { method?: string; body?: string; contentType?: string; origin?: string; remoteAddress?: string; login?: string; host?: string } = {}) {
-  const headers = new Headers({ host: options.host ?? "localhost:8790" });
+  const headers = new Headers({ host: options.host ?? "homeling.tail1234.ts.net" });
   if (options.login) headers.set("tailscale-user-login", options.login);
+  else if (!options.remoteAddress && !options.host) headers.set("tailscale-user-login", "me@github.com");
   if (options.contentType) headers.set("content-type", options.contentType);
   if (options.origin) headers.set("origin", options.origin);
+  else if (!options.remoteAddress && !options.host) headers.set("origin", "https://homeling.tail1234.ts.net");
   return Object.assign(new Request(`http://localhost:8790${path}`, {
     method: options.method ?? "GET",
     headers,

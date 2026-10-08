@@ -1,4 +1,4 @@
-import { memoryInjectionPlan } from "./memory-injection.ts";
+import { memoryInjectionMetadata } from "./memory-injection.ts";
 import { MEMORY_KINDS, MemoryError, type MemoryKind, type PersonaMemoryStore } from "./persona-memory.ts";
 import type { PersonaRegistry } from "./persona-registry.ts";
 import { lockedResponse, SessionLocked, type MutationAdmission } from "./session-lock.ts";
@@ -47,8 +47,8 @@ export async function handleMemoryRequest(req: Request, runtime: MemoryRuntime, 
       if (!await runtime.registry.get(id)) return json({ error: "persona not found" }, 404);
       memory = await runtime.memory.save(id, body.kind as MemoryKind, body.content, body.revision, admission!);
     } else memory = await runtime.memory.read(id);
-    const { strategy, unsupported, notice } = memoryInjectionPlan(persona.launcherCommand ?? "", persona.systemPrompt, memory);
-    return json({ ...memory, injection: { strategy, unsupported, notice } });
+    const injection = memoryInjectionMetadata(persona.launcherCommand ?? "");
+    return json({ ...memory, injection });
   } catch (error) {
     if (error instanceof SessionLocked) return lockedResponse();
     if (error instanceof MemoryError) return json({ error: error.message, code: error.code }, error.status);

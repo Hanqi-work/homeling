@@ -70,7 +70,8 @@ export class PersonaMemoryStore {
     try { fd = openSync(join(directory, `${kind}.md`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { content: "", revision: revision(Buffer.alloc(0)) };
-      throw new MemoryError("memory.unsafe", 400, "Memory file could not be safely opened");
+      if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new MemoryError("memory.unsafe", 400, "Memory file could not be safely opened");
+      throw error;
     }
     try {
       const stat = fstatSync(fd);
@@ -106,10 +107,7 @@ export class PersonaMemoryStore {
       catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryError("memory.busy", 409, "Memory write in progress; reload before retrying"); throw error; }
       const before = this.snapshot(id);
       if (before.documents[kind].revision !== expectedRevision) throw new MemoryError("memory.conflict", 409, "Memory changed; reload before saving");
-      admission.dispatch(() => {
-        const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
-      });
+      admission.dispatch(() => writeExclusiveFile(temporary, bytes));
       // Actual irreversible commit, not merely the asynchronous save entrypoint.
       admission.dispatch(() => renameSync(temporary, join(directory, `${kind}.md`)));
       committed = true;
@@ -133,8 +131,7 @@ export class PersonaMemoryStore {
     admission.dispatch(() => {
       mkdirSync(this.root, { recursive: true, mode: 0o700 }); mkdirSync(directory, { recursive: true, mode: 0o700 });
       checkPath(this.root, true); checkPath(directory, true);
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+      writeExclusiveFile(path, bytes);
     });
     return path;
   }
