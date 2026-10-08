@@ -28,7 +28,7 @@ add_env HOMELING_PORT "${HOMELING_PORT:-8790}"
 [ -n "${HOMELING_TRUSTED_USERS:-}" ] && add_env HOMELING_TRUSTED_USERS "$HOMELING_TRUSTED_USERS"
 [ -n "${HOMELING_TAILSCALE_HOST:-}" ] && add_env HOMELING_TAILSCALE_HOST "$HOMELING_TAILSCALE_HOST"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$(dirname "$PLIST")"
 
 # Unload the existing agent first so the reload below picks up the new plist.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
@@ -61,5 +61,4 @@ echo "[install-launchd] installed $PLIST"
 echo "[install-launchd] logs: $LOG_DIR/daemon.{out,err}.log"
 echo "[install-launchd] note: herdr.collie.plist untouched"
 
-# Register as a bun workspace script for discoverability:
-#   bun run --filter '@homeling/daemon' install:launchd
+# Run from the repository root: bash scripts/install-launchd.sh

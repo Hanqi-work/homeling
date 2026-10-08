@@ -112,17 +112,16 @@ export class PersonaRegistry {
   }
 
   private mutate<T>(change: (registry: RegistryFile) => { next: RegistryFile; result: T }): Promise<T> {
-    let result: T;
     const write = this.writeTail.then(async () => {
       const registry = await this.load();
       const changed = change(registry);
-      result = changed.result;
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
       const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, `${JSON.stringify(changed.next, null, 2)}\n`, { mode: 0o600 });
         await rename(temporary, this.path);
         this.current = changed.next;
+        return changed.result;
       } catch (error) {
         const { rm } = await import("node:fs/promises");
         await rm(temporary, { force: true }).catch(() => undefined);
@@ -130,7 +129,7 @@ export class PersonaRegistry {
       }
     });
     this.writeTail = write.then(() => undefined, () => undefined);
-    return write.then(() => result);
+    return write;
   }
 }
 

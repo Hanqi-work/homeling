@@ -237,17 +237,19 @@ export function sendPersonaMessage(
       }, { status: 502 });
     }
     const outcome = await response.clone().json().catch(() => null) as Record<string, unknown> | null;
-    if ((response.ok && outcome?.ok === true || outcome?.textDelivered === true) && !persona.systemPromptInjected && persona.systemPrompt) {
+    const accepted = response.ok && outcome?.ok === true;
+    const textDelivered = outcome?.textDelivered === true;
+    if ((accepted || textDelivered) && !persona.systemPromptInjected && persona.systemPrompt) {
       try { await runtime.registry.patchPersona(id, { systemPromptInjected: true }); }
       catch (error) { console.error(`[homeling-daemon] could not persist prompt-injection marker: ${error instanceof Error ? error.message : String(error)}`); }
     }
-    const partial = outcome?.textDelivered === true || outcome?.deliveryUnknown === true || response.status >= 500;
-    if ((response.ok && outcome?.ok === true) || partial) {
+    const partial = textDelivered || outcome?.deliveryUnknown === true || response.status >= 500;
+    if (accepted || partial) {
       const headers = new Headers(response.headers);
       headers.set("content-type", "application/json; charset=utf-8");
       return new Response(JSON.stringify({
         ...(outcome ?? { ok: false, error: `Message delivery outcome unknown (${response.status})` }),
-        ...(partial && outcome?.textDelivered !== true ? { deliveryUnknown: true } : {}),
+        ...(partial && !textDelivered ? { deliveryUnknown: true } : {}),
         personaConfirmationText: submittedText,
       }), { status: response.status, statusText: response.statusText, headers });
     }
