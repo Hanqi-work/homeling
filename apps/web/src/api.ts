@@ -1,4 +1,4 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { ActivityResponse, ActivityTaskResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 import { sessionState } from "./session-state.ts";
 
@@ -36,13 +36,24 @@ export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promis
   return result.text;
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, signal?: AbortSignal, errorLabel?: string): Promise<T> {
   const res = await fetch(`${API_PREFIX}${path}`, {
     signal,
     headers: { accept: "application/json" },
   });
-  if (!res.ok) throw new Error(`${path} ${res.status}`);
+  if (!res.ok) {
+    const message = errorLabel === undefined ? `${path} ${res.status}` : `${errorLabel} (${res.status})`;
+    throw new Error(message);
+  }
   return (await res.json()) as T;
+}
+
+export function fetchActivity(personaId: string, signal?: AbortSignal): Promise<ActivityResponse> {
+  return getJson(`persona/${encodeURIComponent(personaId)}/activity`, signal, "Activity unavailable");
+}
+
+export function fetchTaskOccurrence(occurrenceKey: string, signal?: AbortSignal): Promise<ActivityTaskResponse> {
+  return getJson(`activity/task/${encodeURIComponent(occurrenceKey)}`, signal, "Recorded task unavailable");
 }
 
 /** Same-origin daemon reverse proxy; the browser never connects to Collie's :8787. */
@@ -202,9 +213,13 @@ export async function approvePendingRequest(requestId: string, optionId: string)
   throw new Error(`approval ${response.status}`);
 }
 
-export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: string): Promise<PaneHistoryResponse> {
+function taskPanePath(paneId: string, action: string, occurrenceKey?: string): string {
+  return occurrenceKey ? `activity/task/${encodeURIComponent(occurrenceKey)}/${action || "screen"}` : `pane/${encodeURIComponent(paneId)}${action ? `/${action}` : ""}`;
+}
+
+export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: string, occurrenceKey?: string): Promise<PaneHistoryResponse> {
   const cursor = before ? `?before=${encodeURIComponent(before)}` : "";
-  return getJson(`pane/${encodeURIComponent(paneId)}/history${cursor}`, signal);
+  return getJson(`${taskPanePath(paneId, "history", occurrenceKey)}${cursor}`, signal);
 }
 
 export interface PaneReadResponse {
@@ -215,12 +230,13 @@ export interface PaneReadResponse {
 }
 
 /** Read the bounded current pane screen; this is not a terminal control channel. */
-export function fetchPaneScreen(paneId: string, signal?: AbortSignal): Promise<PaneReadResponse> {
-  return getJson(`pane/${encodeURIComponent(paneId)}`, signal);
+export function fetchPaneScreen(paneId: string, signal?: AbortSignal, occurrenceKey?: string): Promise<PaneReadResponse> {
+  return getJson(taskPanePath(paneId, "", occurrenceKey), signal);
 }
 
-export async function stopPaneTask(paneId: string): Promise<void> {
-  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
+export async function stopPaneTask(paneId: string, occurrenceKey?: string): Promise<void> {
+  const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "stop", occurrenceKey)}`, {
+
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: "{}",
@@ -241,9 +257,10 @@ export interface ControlKeyResult {
 }
 
 /** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
-export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string): Promise<ControlKeyResult> {
+export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string, occurrenceKey?: string): Promise<ControlKeyResult> {
   try {
-    const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
+    const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "control-key", occurrenceKey)}`, {
+
       method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
     });
@@ -255,9 +272,11 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
         return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
       }
     }
+    if (value && typeof value === "object" && "executed" in value && value.executed === false) return { outcome: "not-submitted", error: "error" in value && typeof value.error === "string" ? value.error : `control key ${response.status}` };
     if (response.status === 423 && value && typeof value === "object") {
       return { outcome: (value as { deliveryUnknown?: boolean }).deliveryUnknown === true ? "unknown" : "not-submitted", error: "Unlock Homeling before controlling the pane" };
     }
+
     return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
   } catch (error) {
     if (error instanceof ReplyRequestError && error.textDelivered === false) return { outcome: "not-submitted", error: error.message };
@@ -277,8 +296,9 @@ export class ReplyRequestError extends Error {
 }
 
 /** Submit text to an existing Collie pane; history polling, not this response, confirms delivery. */
-export async function sendPaneReply(paneId: string, text: string): Promise<void> {
-  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/reply`, {
+export async function sendPaneReply(paneId: string, text: string, occurrenceKey?: string): Promise<void> {
+  const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "reply", occurrenceKey)}`, {
+
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text, submit: true }),
