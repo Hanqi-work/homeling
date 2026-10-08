@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@homeling/contracts": "workspace:*"
+  },
   "scripts": {
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",

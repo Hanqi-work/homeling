@@ -1,4 +1,4 @@
-import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, SnapshotResponse } from "@homeling/contracts";
+import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, SnapshotResponse } from "@homeling/contracts";
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
@@ -48,6 +48,31 @@ export async function launchTask(launcher: Launcher, paneId?: string): Promise<E
     throw new LaunchRequestError(failure?.error ?? `Launch failed (${response.status})`, failure?.code);
   }
   return result;
+}
+
+export function fetchPendingRequests(signal?: AbortSignal): Promise<PendingRequest[]> {
+  return getJson("requests", signal);
+}
+
+export interface ApprovalResponse {
+  readonly status: "pending" | "resolved" | "expired";
+  readonly outcome: "submitted" | "unknown" | "already-handled" | "stale" | "not-submitted";
+}
+
+export async function approvePendingRequest(requestId: string, optionId: string): Promise<ApprovalResponse> {
+  const response = await fetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ optionId }),
+  });
+  let result: ApprovalResponse | null = null;
+  try {
+    result = await response.json() as ApprovalResponse;
+  } catch {
+    // The status below still distinguishes a stale request from a failed network write.
+  }
+  if (result) return result;
+  throw new Error(`approval ${response.status}`);
 }
 
 export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: string): Promise<PaneHistoryResponse> {

@@ -20,12 +20,13 @@ afterEach(() => {
 });
 
 describe("allowBridgePath — the narrow allowlist", () => {
-  test("snapshot and pane history pass only as GET; reply passes only as POST", () => {
+  test("pane reads pass as GET; reply and guarded key writes pass only as POST", () => {
     expect(allowBridgePath("/api/snapshot")).toBe(true);
-    expect(allowBridgePath("/api/pane/w5N:p1/history")).toBe(true);
-    expect(allowBridgePath("/api/pane/w5N%3Ap1/history")).toBe(false);
+    expect(allowBridgePath("/api/pane/w5N:p1")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/history")).toBe(true);
+    expect(allowBridgePath("/api/pane/w1:p2/keys", "POST")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/reply", "POST")).toBe(true);
+    expect(allowBridgePath("/api/pane/w1:p2/keys")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/reply")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/reply", "GET")).toBe(false);
     expect(allowBridgePath("/api/launchers")).toBe(true);
@@ -38,7 +39,7 @@ describe("allowBridgePath — the narrow allowlist", () => {
     expect(allowBridgePath("/api/pane/w1:p2/reply")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/chat")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/close")).toBe(false);
-    expect(allowBridgePath("/api/pane/w1:p2")).toBe(false);
+    expect(allowBridgePath("/api/pane/w1:p2/keys", "POST")).toBe(true);
     expect(allowBridgePath("/api/launch")).toBe(false);
     expect(allowBridgePath("/api/launchers")).toBe(true);
     expect(allowBridgePath("/api/snapshot/x")).toBe(false);
@@ -53,11 +54,15 @@ describe("proxyTargetUrl", () => {
   test("rewrites /lite/api/* to the bridge origin, preserving the query string", () => {
     expect(proxyTargetUrl("/lite/api/snapshot", cfg)).toBe(`${cfg.bridgeOrigin}/api/snapshot`);
     expect(proxyTargetUrl("/lite/api/snapshot?x=1", cfg)).toBe(`${cfg.bridgeOrigin}/api/snapshot?x=1`);
+    expect(proxyTargetUrl("/lite/api/pane/w1:p2", cfg)).toBe(`${cfg.bridgeOrigin}/api/pane/w1:p2`);
     expect(proxyTargetUrl("/lite/api/pane/w1:p2/history?limit=60&before=abc", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w1:p2/history?limit=60&before=abc`,
     );
     expect(proxyTargetUrl("/lite/api/launchers", cfg)).toBe(`${cfg.bridgeOrigin}/api/launchers`);
     expect(proxyTargetUrl("/lite/api/launch", cfg, "POST")).toBe(`${cfg.bridgeOrigin}/api/launch`);
+    expect(proxyTargetUrl("/lite/api/pane/w1:p2/keys", cfg, "POST")).toBe(
+      `${cfg.bridgeOrigin}/api/pane/w1:p2/keys`,
+    );
     expect(proxyTargetUrl("/lite/api/pane/w5N%3Ap1/history", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w5N:p1/history`,
     );
@@ -77,6 +82,16 @@ describe("proxyTargetUrl", () => {
     expect(() => proxyTargetUrl("/lite/api/pane/p1/%2e%2e/history", cfg)).toThrow();
     expect(() => proxyTargetUrl("/lite/api/snapshot/../config", cfg)).toThrow();
     expect(() => proxyTargetUrl("/lite/api/pane/p1/reply", cfg)).toThrow();
+  });
+
+  test("POST keys is not exposed as a direct browser proxy route", async () => {
+    let calls = 0;
+    const fetcher = async () => { calls += 1; return Response.json({ ok: true }); };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/p1/keys", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"keys":["1"]}',
+    }), cfg, fetcher);
+    expect(response.status).toBe(404);
+    expect(calls).toBe(0);
   });
 
   test("POST reply refuses simple-form content types before contacting Collie", async () => {

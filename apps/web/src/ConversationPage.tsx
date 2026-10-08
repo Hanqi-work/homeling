@@ -3,10 +3,12 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { mapTaskStatuses, mergeTranscripts, transcriptToMessages, type Launcher, type PaneHistoryResponse, type SnapshotResponse, type Task } from "@homeling/contracts";
+import { mapTaskStatuses, mergeTranscripts, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type SnapshotResponse, type Task } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
 import { Link, useParams } from "react-router";
-import { fetchLaunchers, fetchPaneHistory, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply } from "./api.ts";
+import { approvePendingRequest, fetchLaunchers, fetchPaneHistory, fetchPendingRequests, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply } from "./api.ts";
+import { PendingRequestCard } from "./PendingRequestCard.tsx";
+import { RequestPollState } from "./request-poll-state.ts";
 import { toAssistantMessages } from "./assistant-messages.ts";
 import { ConversationMessage } from "./ConversationMessage.tsx";
 import { historyReducer, initialHistoryState, optimisticEntries, reconcileOutgoing, type HistoryAction, type OutgoingMessage } from "./history-reducer.ts";
@@ -43,6 +45,11 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   const [selectedCommand, setSelectedCommand] = useState("");
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [settledRequests, setSettledRequests] = useState<PendingRequest[]>([]);
+  const requestPollState = useRef<RequestPollState | null>(null);
+  if (!requestPollState.current) requestPollState.current = new RequestPollState();
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendBlocked, setSendBlocked] = useState(false);
@@ -172,6 +179,45 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
     } finally {
       setLaunching(false);
     }
+  }
+
+  useEffect(() => {
+    const session = startAbortableSerialPolling(async (signal) => {
+      const pollVersion = requestPollState.current!.begin();
+      try {
+        const requests = await fetchPendingRequests(signal);
+        if (signal.aborted) return;
+        const update = requestPollState.current!.accept(pollVersion, requests, paneId);
+        if (!update) return;
+        for (const request of update.settled) {
+          window.setTimeout(() => {
+            setSettledRequests((current) => current.filter((item) => item.id !== request.id));
+          }, 5000);
+        }
+        if (update.settled.length > 0) {
+          setSettledRequests((current) => [
+            ...current.filter((item) => !update.settled.some((gone) => gone.id === item.id)),
+            ...update.settled,
+          ]);
+        }
+        setPendingRequests(update.pending);
+        setRequestError(null);
+      } catch (err: unknown) {
+        if (!signal.aborted && requestPollState.current!.isCurrent(pollVersion)) {
+          setRequestError(err instanceof Error ? err.message : "request poll failed");
+        }
+      }
+    }, 2000);
+    return () => session.stop();
+  }, [paneId]);
+
+  function keepSettledRequest(request: PendingRequest): void {
+    requestPollState.current!.settle(request.id);
+    setPendingRequests((current) => current.filter((item) => item.id !== request.id));
+    setSettledRequests((current) => [...current.filter((item) => item.id !== request.id), request]);
+    window.setTimeout(() => {
+      setSettledRequests((current) => current.filter((item) => item.id !== request.id));
+    }, 5000);
   }
 
   async function loadOlder(): Promise<void> {
@@ -318,6 +364,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
               </div>
             </form>
           ) : launchErrorNotice}
+          {requestError ? <p role="status" className="mt-1 text-xs text-amber-300">权限请求暂不可用：{requestError}</p> : null}
         </header>
         <ThreadPrimitive.Root className="flex flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex flex-col gap-3 pb-8">
@@ -335,6 +382,18 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
               >
                 {loadingOlder ? "Loading older messages…" : "Load older messages"}
               </button>
+            ) : null}
+            {pendingRequests.length + settledRequests.length > 0 ? (
+              <section aria-label="待处理请求" className="flex flex-col gap-3">
+                {[...pendingRequests, ...settledRequests].map((request) => (
+                  <PendingRequestCard
+                    key={request.id}
+                    request={request}
+                    onApprove={approvePendingRequest}
+                    onSettled={keepSettledRequest}
+                  />
+                ))}
+              </section>
             ) : null}
             <ThreadPrimitive.Empty>
               <p className="py-8 text-center text-sm text-neutral-500">
