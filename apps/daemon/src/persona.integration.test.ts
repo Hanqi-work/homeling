@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleUnlockedRequest as handleRequest, fixtureAdmission, fixtureRecovery } from "./session-test-fixture.ts";
@@ -134,7 +134,7 @@ async function memoryHerdr(root: string, state: MemoryState): Promise<string> {
 }
 
 async function fixture(options: { failSendKeys?: boolean; failFirstReplyPartial?: boolean; launchers?: Array<{ command: string; label: string; cwd?: string }> } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "homeling-persona-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "homeling-persona-")));
   roots.push(root);
   const state: MemoryState = { workspaces: [], tabs: [], panes: [], text: [], keys: [], closed: [], eventStreams: [], startedAgents: new Set(), agentStatus: "working", actions: [], paneReads: 0, readScreens: [], failSendKeys: options.failSendKeys ?? false };
   const socketPath = await memoryHerdr(root, state);
@@ -373,8 +373,9 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     const next = await handleRequest(request(`/lite/api/persona/${persona.id}/message`, {
       method: "POST", contentType: "application/json", body: JSON.stringify({ text: "Next" }),
     }), cfg, fetcher, runtime);
-    expect(next.status).toBe(200);
-    expect(deliveries.at(-1)?.body).toEqual({ text: "Next", submit: true });
+    expect(next.status).toBe(409);
+    expect(await next.json()).toMatchObject({ code: "memory.delivery_unknown", deliveryUnknown: true });
+    expect(deliveries).toHaveLength(1);
   });
 
   test("does not silently replace a removed launcher during persona recovery", async () => {
