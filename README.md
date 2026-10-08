@@ -2,13 +2,13 @@
 
 住在自己电脑上的 AI 伙伴，手机上对话、派任务、审批、查看结果。目标是 Dots / Grok Bot / Muse 式的 persona agent；基于已有 herdr / Collie，**不是 Collie fork，也不替换旧 UI**。
 
-**当前是开发中的 v1，不是正式发布。** 已接线的能力包括 pane 对话流（markdown/工具 trace）、显式发送与 history 送达确认、快捷回复、权限/选项卡片、allowlist 派任务、任务详情/只读终端镜像/中断、PWA 基础。persona、记忆、Activity、STT、特殊键、push、triage、头像/动效、idle-lock 和多语言由后续票增量补齐；本 README 随合入更新。PWA 真机安装与通知不能仅凭单元测试认定完成；**目前不提供 Homeling 自持 push**。
+**当前是开发中的 v1，不是正式发布。** 已接线的能力包括 pane 对话流（markdown/工具 trace）、显式发送与 history 送达确认、快捷回复、权限/选项卡片、allowlist 派任务、任务详情/只读终端镜像/中断、persona 创建与导航、持久 Markdown 记忆与编辑、STT、特殊键、PWA 基础。Activity、push、triage、头像/动效、idle-lock 完整体验和多语言由后续票增量补齐；本 README 随合入更新。记忆保存与 persona 控制已消费 #19 服务端写锁契约，未配置本机解锁凭据时 fail-closed，不提供开发绕过。PWA 真机安装与通知不能仅凭单元测试认定完成；**目前不提供 Homeling 自持 push**。
 
 正式发布门禁：完成 [PRD §9](PRD.md#9-v1-功能清单验收基线) 全部必选能力，并通过对应设备验收。README / LICENSE 就位不等于 v1 已发布。
 
 ## 架构
 
-Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。目标实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；尚未交付的 registry / memory / push 不应当作当前 API。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
+Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，尚未交付的 push 不应当作当前 API。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
 
 ```text
 手机（tailnet） → Tailscale Serve HTTPS :443

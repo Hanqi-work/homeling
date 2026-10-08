@@ -1,0 +1,17 @@
+import { afterEach, expect, test } from "bun:test";
+import { deletePersona } from "./api.ts";
+const original = globalThis.fetch;
+afterEach(() => { globalThis.fetch = original; });
+test("delete preserves partial archive result rather than claiming fully archived", async () => {
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(url)).toBe("/lite/api/persona/mira");
+    expect(init?.method).toBe("DELETE");
+    expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+    return Response.json({ deleted: true, archived: false });
+  }) as unknown as typeof fetch;
+  await expect(deletePersona("mira")).resolves.toEqual({ deleted: true, archived: false });
+});
+test("locked deletion is explicitly not dispatched and never mistaken for success", async () => {
+  globalThis.fetch = (async () => Response.json({ error: "Session locked" }, { status: 423 })) as unknown as typeof fetch;
+  await expect(deletePersona("mira")).rejects.toMatchObject({ notDispatched: true });
+});

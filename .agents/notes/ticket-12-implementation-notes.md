@@ -10,14 +10,20 @@
 - #11 负责壳，#12 只新增独立编辑组件和窄接线。#19 负责实际锁契约，最终合绿色 revision 后接实际 dispatch/commit；不以缺省system绕过。
 
 ## Dependencies
-- #11 a1684f67586794c43，#19 a23ad61028907d541：已请求 actual service green revision。显式合入 a4750d62（MutationAdmission）和 9065918e7e70f9c493263b1d8c58bef4732e3f2d（scoped system capabilities）；尚不代表完整 #19 已验收。
+- #19 显式合入 a4750d62（MutationAdmission）、9065918e7e70f9c493263b1d8c58bef4732e3f2d（scoped system capabilities）、2bd322514809197ded5a5bb655537872b3bbf4ea（mandatory service/HTTP guards）及 72f573300b5a0a17ad67a93be5fa59c8c47788fd（runtime 不缓存请求 admission）。不是声称完整 #19 已验收。
+- #11 显式合入 ddd9d6bf88c5e74df627a34b4e297795b1f36675 绿色 shell contract；main.tsx仅追加独立Editor import和slots.memory，未改App/首页壳；最终须包含#11后续修复及integration latest。
 - 已 merge integrate-v1 @ 3a322b2fc942b158e31ab97fbd02ea91315467cb（#9）。
 
 ## TDD / review findings
 - store/API/strategy/session helper 公开seam按红→绿实现；fake pi executable 经 /bin/sh 真正执行生成命令，证明 apostrophe/空格路径参数可运行，仍不等于真机 pi。
 - 顾问发现并修复：提交后读取损坏 sibling 导致已保存却400 → 提交前读并校验所有文档、提交后返回已构造结果；pi regex拒绝CR/LF；freeze复用严格Unicode/NUL校验，组合上限150KB。
 - 首次锁拒绝不创建目录；临时写和rename分别dispatch，rename前失锁清理自身临时文件/锁/新建空目录，不抢他人的锁；commit后不撤销已完成保存。
-- 前端独立PersonaMemoryEditor export(props personaId, optional fake fetcher)，16测试绿，#11槽由父统一接入。
+- 前端独立PersonaMemoryEditor export(props personaId, optional fake fetcher)，16测试绿；已在独立workspace main.tsx两行窄接#11memory slot，父/merger协调保留其他slots。
+- actual service/API五个测试红→绿：pi create/recovery读取冻结文件且普通消息不加prefix；fallback保存后旧session不吸收、恢复新session读取；unknown跨解锁/daemon registry重建仍sticky不重放；shell readiness失锁禁止launcher派发；HTTP GET纯读、PUTsession/Origin双门禁。
+- 消息派发前以用户admission实际提交durable unknown意图；已派发unknown/partial保留sticky，明确接受/拒绝仅登记该尝试结果。未派发锁拒绝只清自身意图，不改其他字段，不赋system。新pane恢复显式重置旧会话状态，不重放原消息。
+- 简化四轴审查：复用0项；采纳mergeDrafts、writeExclusiveFile、strategy metadata分离及底层errno分类4项；跳过跨阶段祖先stat去重，保留安全检查。独立模块12绿、UI16绿。
+- 完整依赖组合全量检查：327 tests / 54 files 通过，bun run typecheck、bun run build通过（待最终integration merge后复跑）。交付顾问静态复核无具体阻塞；独立code-reviewer还在验收。
+- #19升级后#8 STT/#9 control-key旧测试仍走未解锁入口；只迁移为显式fake认证fixture，保留原缺identity/Origin拒绝负例，不改生产guard。macOS临时fixture先realpath，避免系统/var别名触发严格symlink拒绝。
 
 ## Message display follow-up seam
 - session-memory.ts injectedMessagePresentation返回 daemon生成注入的精确证据：attemptId(CSPRNG UUID)、personaId、paneId、confirmationText全文、displayText原草稿、provenance=daemon-injection、historyBinding=required；原文无转换则不生成证据。重复同文/新pane产生独立attemptId；用户自己输入prefix保持其原草稿，绝不字符串strip。
