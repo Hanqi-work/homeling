@@ -26,7 +26,7 @@ function routeState(state: unknown, paneId: string): RouteState {
   };
 }
 
-function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; taskHint?: Task; returnTo: string }): ReactElement {
+function TaskConversation({ paneId, taskHint, returnTo, occurrenceKey }: { paneId: string; taskHint?: Task; returnTo: string; occurrenceKey?: string }): ReactElement {
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
   historyRef.current = history;
@@ -92,7 +92,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
       const id = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId: id });
       try {
-        const response = await fetchPaneHistory(paneId, signal);
+        const response = await fetchPaneHistory(paneId, signal, undefined, occurrenceKey);
         if (signal.aborted) return;
         if (!response.available) {
           dispatch({ type: "unavailable", paneId, requestId: id });
@@ -137,7 +137,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     const session = startAbortableSerialPolling(async (signal) => {
       setRawLoading(true);
       try {
-        const response = await fetchPaneScreen(paneId, signal);
+        const response = await fetchPaneScreen(paneId, signal, occurrenceKey);
         if (!signal.aborted) {
           setRawText(response.text);
           setRawTruncated(response.truncated === true);
@@ -192,7 +192,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
         const attemptOrder = ++sendAttempt.current;
         dispatch({ type: "outgoing-attempt-started", paneId, id: outgoing.id, attemptOrder });
         try {
-          await sendPaneReply(paneId, existing?.textDelivered ? "" : outgoing.text);
+          await sendPaneReply(paneId, existing?.textDelivered ? "" : outgoing.text, occurrenceKey);
           if (existing?.textDelivered || existing?.deliveryUnknown) unblockResolved(outgoing.id);
         } catch (error: unknown) {
           const delivered = error instanceof ReplyRequestError ? error.textDelivered : null;
@@ -215,7 +215,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     setStopSent(false);
     setStopError(null);
     try {
-      await stopPaneTask(paneId);
+      await stopPaneTask(paneId, occurrenceKey);
       setStopSent(true);
       setStopConfirm(false);
     } catch (error: unknown) {
@@ -230,7 +230,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     const id = ++requestSequence.current;
     setLoadingOlder(true);
     try {
-      const response: PaneHistoryResponse = await fetchPaneHistory(paneId, undefined, history.beforeCursor);
+      const response: PaneHistoryResponse = await fetchPaneHistory(paneId, undefined, history.beforeCursor, occurrenceKey);
       if (response.available) dispatch({ type: "received", paneId, requestId: id, entries: response.entries, pageKind: "older", hasMore: response.hasMore });
       else setHistoryError(`History unavailable: ${response.reason}`);
     } catch (error: unknown) {
@@ -300,7 +300,7 @@ export function TaskDetailPage(): ReactElement {
   const state = routeState(location.state, paneId);
   const occurrenceKey = new URLSearchParams(location.search).get("occurrence");
   if (occurrenceKey) return <ActivityTaskBoundary key={occurrenceKey} paneId={paneId} occurrenceKey={occurrenceKey} returnTo={state.returnTo ?? "/"}>
-    {(occurrence) => <TaskConversation key={occurrence.occurrenceKey} paneId={paneId} taskHint={{ paneId, createdAt: Date.parse(occurrence.createdAt), launcher: { command: "", label: occurrence.title }, status: "working" }} returnTo={state.returnTo ?? "/"} />}
+    {(occurrence) => <TaskConversation key={occurrence.occurrenceKey} occurrenceKey={occurrence.occurrenceKey} paneId={paneId} taskHint={{ paneId, createdAt: Date.parse(occurrence.createdAt), launcher: { command: "", label: occurrence.title }, status: "working" }} returnTo={state.returnTo ?? "/"} />}
   </ActivityTaskBoundary>;
   return <TaskConversation key={paneId} paneId={paneId} taskHint={state.task} returnTo={state.returnTo ?? "/"} />;
 }

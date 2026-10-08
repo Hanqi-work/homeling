@@ -13,7 +13,7 @@ let root: Root | undefined;
 let container: HTMLElement;
 const originalFetch = globalThis.fetch;
 beforeAll(async () => {
-  for (const [key, value] of Object.entries({ window, document: window.document, navigator: window.navigator, IS_REACT_ACT_ENVIRONMENT: true })) {
+  for (const [key, value] of Object.entries({ window, document: window.document, navigator: window.navigator, ResizeObserver: window.ResizeObserver, MutationObserver: window.MutationObserver, requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), IS_REACT_ACT_ENVIRONMENT: true })) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
@@ -33,6 +33,19 @@ test("actual Activity task route refuses to fetch a reused pane's newer history"
   expect(container.textContent).toContain("different task occurrence");
   expect(container.querySelector("textarea")).toBeNull();
   expect(calls).toEqual(["/lite/api/activity/task/old"]);
+});
+
+test("a verified live task uses occurrence-scoped history rather than a raw pane history endpoint", async () => {
+  const calls: string[] = [];
+  Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (input: string) => {
+    calls.push(String(input));
+    if (String(input).endsWith("/activity/task/old")) return Response.json({ occurrence: { ...occurrence, status: "active" }, current: true, observation: "live", liveAvailable: true });
+    if (String(input).endsWith("/history")) return Response.json({ paneId: "p", available: true, entries: [], hasMore: false, total: 0, fileTruncated: false });
+    return Response.json({ ts: Date.now(), bridge: "connected", agents: [], shellPanes: [] });
+  } });
+  await act(async () => mount().render(<MemoryRouter initialEntries={["/t/p?occurrence=old"]}><Routes><Route path="/t/:paneId" element={<TaskDetailPage />} /></Routes></MemoryRouter>));
+  expect(calls).toContain("/lite/api/activity/task/old/history");
+  expect(calls).not.toContain("/lite/api/pane/p/history");
 });
 
 test("switching persona discards late Activity rows from the previous persona", async () => {

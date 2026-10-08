@@ -1,6 +1,7 @@
-import type { TaskOccurrence } from "@homeling/contracts";
+import type { ActivityTaskResponse, TaskOccurrence } from "@homeling/contracts";
 import { useEffect, useState, type ReactElement } from "react";
 import { Link } from "react-router";
+import { fetchTaskOccurrence } from "./api.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 
 export function RecordedTaskDetail({ occurrence, returnTo, reason }: { occurrence: TaskOccurrence; returnTo: string; reason: string }): ReactElement {
@@ -16,14 +17,12 @@ export function RecordedTaskDetail({ occurrence, returnTo, reason }: { occurrenc
 
 export function ActivityTaskBoundary({ paneId, occurrenceKey, returnTo, children }: { paneId: string; occurrenceKey: string; returnTo: string; children: (occurrence: TaskOccurrence) => ReactElement }): ReactElement {
   const binding = `${paneId}\0${occurrenceKey}`;
-  const [state, setState] = useState<{ binding: string; occurrence?: TaskOccurrence; current?: boolean; error?: string }>({ binding });
+  const [state, setState] = useState<Partial<ActivityTaskResponse> & { binding: string; error?: string }>({ binding });
   useEffect(() => {
     setState({ binding });
     const polling = startAbortableSerialPolling(async (signal) => {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL || "/lite/"}api/activity/task/${encodeURIComponent(occurrenceKey)}`, { signal, headers: { accept: "application/json" } });
-        if (!response.ok) throw new Error(`Recorded task unavailable (${response.status})`);
-        const result = await response.json() as { occurrence: TaskOccurrence; current: boolean };
+        const result = await fetchTaskOccurrence(occurrenceKey, signal);
         if (result.occurrence?.paneId !== paneId || result.occurrence.occurrenceKey !== occurrenceKey) throw new Error("Task occurrence does not match this pane");
         if (!signal.aborted) setState({ binding, ...result });
       } catch (error) {
@@ -35,8 +34,8 @@ export function ActivityTaskBoundary({ paneId, occurrenceKey, returnTo, children
   const current = state.binding === binding ? state : { binding };
   if (current.error) return <main className="space-y-3 p-5"><Link to={returnTo}>Back to Activity</Link><p role="alert">{current.error} · live pane access is disabled.</p></main>;
   if (!current.occurrence) return <main className="p-5">Checking recorded task identity…</main>;
-  if (!current.current || current.occurrence.status !== "active") {
-    return <RecordedTaskDetail occurrence={current.occurrence} returnTo={returnTo} reason={!current.current ? "This pane now belongs to a different task occurrence." : "This recorded occurrence has ended or its outcome is unknown."} />;
+  if (!current.liveAvailable || current.observation !== "live" || !current.current || current.occurrence.status !== "active") {
+    return <RecordedTaskDetail occurrence={current.occurrence} returnTo={returnTo} reason={!current.current ? "This pane now belongs to a different task occurrence." : current.observation !== "live" ? "Live observation is unavailable; activity during this gap is unknown." : "This occurrence has ended or its upstream session cannot be reliably identified."} />;
   }
   return children(current.occurrence);
 }

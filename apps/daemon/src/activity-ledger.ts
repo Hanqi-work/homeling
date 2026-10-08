@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ActivityEvent, ActivityResponse, TaskOccurrence } from "@homeling/contracts";
+import type { ActivityEvent, ActivityResponse, ActivityTaskResponse, TaskOccurrence } from "@homeling/contracts";
 import type { MutationAdmission } from "./session-lock.ts";
 import type { SystemAdmission } from "./system-admission.ts";
 import type { TaskResultAdmission } from "./mutation-result.ts";
@@ -32,7 +32,8 @@ function validatedLedger(value: unknown): LedgerState {
   for (const item of value.events) {
     if (!object(item) || !text(item.id) || !text(item.occurrenceKey) || !text(item.kind) || !text(item.dedupeKey) || !date(item.occurredAt) || !["task.created", "task.completed", "task.failed", "task.unknown", "observation.gap"].includes(item.kind) || !["daemon.launch", "herdr.event", "daemon.observer"].includes(String(item.source)) || (item.detail !== undefined && typeof item.detail !== "string") || item.sequence !== sequence + 1 || ids.has(item.id) || keys.has(item.dedupeKey)) return invalid();
     const occurrence = occurrences.get(item.occurrenceKey);
-    if (!occurrence || occurrence.paneId !== item.paneId || occurrence.personaId !== item.personaId || item.dedupeKey !== `${item.occurrenceKey}:${item.kind}`) return invalid();
+    const baseKey = `${item.occurrenceKey}:${item.kind}`;
+    if (!occurrence || occurrence.paneId !== item.paneId || occurrence.personaId !== item.personaId || !(item.dedupeKey === baseKey || item.kind === "observation.gap" && item.dedupeKey.startsWith(`${baseKey}:`) && item.dedupeKey.length > baseKey.length + 1)) return invalid();
     ids.add(item.id); keys.add(item.dedupeKey); sequence++;
     const found = kinds.get(item.occurrenceKey) ?? new Set<string>(); found.add(item.kind); kinds.set(item.occurrenceKey, found);
   }
@@ -49,6 +50,14 @@ function validatedLedger(value: unknown): LedgerState {
   return value as unknown as LedgerState;
 }
 
+function latestOccurrence(occurrences: readonly TaskOccurrence[], paneId: string): TaskOccurrence | undefined {
+  for (let index = occurrences.length - 1; index >= 0; index--) {
+    const occurrence = occurrences[index]!;
+    if (occurrence.paneId === paneId) return occurrence;
+  }
+  return undefined;
+}
+
 type ObservedEvent = { kind: "status"; paneId: string; spaceId: string; status: "idle" | "working" | "blocked" | "done" | "unknown" } | { kind: "exit"; paneId: string; spaceId: string };
 
 /** Only fields actually supported by the Herdr wire contract are consumed. */
@@ -61,6 +70,10 @@ export function normalizeHerdrActivityEvent(event: string, data: unknown): Obser
   if (name === "pane_exited" || name === "pane_closed") return { kind: "exit", paneId: body.pane_id, spaceId: body.workspace_id };
   if (name !== "pane_agent_status_changed" || !["idle", "working", "blocked", "done", "unknown"].includes(String(body.agent_status))) return null;
   return { kind: "status", paneId: body.pane_id, spaceId: body.workspace_id, status: body.agent_status as Extract<ObservedEvent, { kind: "status" }>["status"] };
+}
+
+export class TaskOccurrenceUnavailable extends Error {
+  constructor() { super("Task occurrence is historical, unknown, or cannot be reliably bound to the live pane"); }
 }
 
 export class ActivityLedger {
@@ -79,12 +92,14 @@ export class ActivityLedger {
     }
   }
 
-  private commit<T>(admission: MutationAdmission, change: (state: LedgerState) => T): Promise<T> {
+  private commit<T>(admission: MutationAdmission, change: (state: LedgerState) => { result: T; changed: boolean }): Promise<T> {
     const result = this.tail.then(async () => {
       admission.assert();
       const state = await this.read();
       const previous = state.events.length;
-      const value = change(state);
+      const { result: value, changed } = change(state);
+      if (!changed) return structuredClone(value);
+      validatedLedger(state);
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
       const temporary = `${this.path}.${randomUUID()}.tmp`;
       try {
@@ -118,19 +133,55 @@ export class ActivityLedger {
 
   async ownership(paneId: string): Promise<TaskOccurrence | undefined> {
     const { occurrences } = await this.list();
-    return [...occurrences].reverse().find((occurrence) => occurrence.paneId === paneId);
+    return latestOccurrence(occurrences, paneId);
+  }
+
+  private lookup(state: LedgerState, occurrenceKey: string): ActivityTaskResponse | undefined {
+    const occurrence = state.occurrences.find((item) => item.occurrenceKey === occurrenceKey);
+    if (!occurrence) return undefined;
+    const current = latestOccurrence(state.occurrences, occurrence.paneId)?.occurrenceKey === occurrenceKey;
+    const launchBound = state.events.some((event) => event.occurrenceKey === occurrenceKey && event.kind === "task.created" && event.source === "daemon.launch");
+    return { occurrence, current, observation: this.observation, liveAvailable: current && occurrence.status === "active" && this.observation === "live" && launchBound };
+  }
+
+  async task(occurrenceKey: string): Promise<ActivityTaskResponse | undefined> {
+    await this.tail;
+    return this.lookup(await this.read(), occurrenceKey);
+  }
+
+  private current(state: LedgerState, occurrenceKey: string): TaskOccurrence {
+    const task = this.lookup(state, occurrenceKey);
+    if (!task?.liveAvailable) throw new TaskOccurrenceUnavailable();
+    return task.occurrence;
+  }
+
+  async assertCurrent(occurrenceKey: string): Promise<TaskOccurrence> {
+    await this.tail;
+    return this.current(await this.read(), occurrenceKey);
+  }
+
+  async dispatchCurrent<T>(occurrenceKey: string, admission: MutationAdmission, effect: (occurrence: TaskOccurrence) => T): Promise<Awaited<T>> {
+    if ("scope" in admission) throw new Error("Live task controls require original user admission");
+    const dispatched = this.tail.then(async () => {
+      admission.assert();
+      const occurrence = this.current(await this.read(), occurrenceKey);
+      return { result: admission.dispatch(() => effect(occurrence)) };
+    });
+    // Release serialization after actual dispatch, not after network completion; the observer stays live.
+    this.tail = dispatched.then(() => undefined, () => undefined);
+    return await dispatched.then(({ result }) => result);
   }
 
   register(input: { personaId: string; spaceId: string; paneId: string; title: string }, admission: MutationAdmission | TaskResultAdmission): Promise<TaskOccurrence> {
     if ("scope" in admission && (admission.scope !== "task.result" || !("resourceId" in admission) || admission.resourceId !== input.paneId)) return Promise.reject(new Error("Task registration requires user admission or its exact dispatched pane result"));
     return this.commit(admission, (state) => {
-      const current = [...state.occurrences].reverse().find((item) => item.paneId === input.paneId);
+      const current = latestOccurrence(state.occurrences, input.paneId);
       if (current && (current.personaId !== input.personaId || current.spaceId !== input.spaceId)) throw new Error("Task ownership cannot be reassigned");
-      if (current?.status === "active") return current;
+      if (current?.status === "active") return { result: current, changed: false };
       const occurrence: TaskOccurrence = { ...input, occurrenceKey: randomUUID(), createdAt: new Date().toISOString(), status: "active" };
       state.occurrences.push(occurrence);
       this.append(state, occurrence, "task.created", "daemon.launch");
-      return occurrence;
+      return { result: occurrence, changed: true };
     });
   }
 
@@ -139,37 +190,50 @@ export class ActivityLedger {
     const raw = normalizeHerdrActivityEvent(event, data);
     if (!raw) return Promise.resolve();
     return this.commit(admission, (state) => {
-      let occurrence = [...state.occurrences].reverse().find((item) => item.paneId === raw.paneId);
-      if (!occurrence || occurrence.spaceId !== raw.spaceId) return;
-      if (occurrence.status === "completed" && state.completionEpochs?.[occurrence.occurrenceKey] === this.observationEpoch && raw.kind === "status" && raw.status === "working") {
+      let occurrence = latestOccurrence(state.occurrences, raw.paneId);
+      if (!occurrence || occurrence.spaceId !== raw.spaceId) return { result: undefined, changed: false };
+      if (raw.kind === "exit") {
+        if (occurrence.status !== "active") return { result: undefined, changed: false };
+        this.settle(state, occurrence, "unknown", "herdr.event", "Pane exited/closed; Herdr provides no exit outcome");
+        return { result: undefined, changed: true };
+      }
+      if (occurrence.status === "completed" && state.completionEpochs?.[occurrence.occurrenceKey] === this.observationEpoch && raw.status === "working") {
         occurrence = { ...occurrence, occurrenceKey: randomUUID(), createdAt: new Date().toISOString(), status: "active" };
         state.occurrences.push(occurrence);
         this.append(state, occurrence, "task.created", "herdr.event", "New work cycle observed after explicit completion");
       }
-      if (occurrence.status !== "active") return;
-      if (raw.kind === "status") {
-        if (raw.status === "working") {
-          state.workEpochs ??= {};
-          state.workEpochs[occurrence.occurrenceKey] = this.observationEpoch;
-          return;
-        }
-        if (raw.status !== "done" || state.workEpochs?.[occurrence.occurrenceKey] !== this.observationEpoch) return;
-        this.settle(state, occurrence, "completed", "herdr.event");
-        state.completionEpochs ??= {};
-        state.completionEpochs[occurrence.occurrenceKey] = this.observationEpoch;
-      } else this.settle(state, occurrence, "unknown", "herdr.event", "Pane exited/closed; Herdr provides no exit outcome");
+      if (occurrence.status !== "active") return { result: undefined, changed: false };
+      if (raw.status === "working") {
+        if (state.workEpochs?.[occurrence.occurrenceKey] === this.observationEpoch) return { result: undefined, changed: false };
+        state.workEpochs ??= {};
+        state.workEpochs[occurrence.occurrenceKey] = this.observationEpoch;
+        return { result: undefined, changed: true };
+      }
+      if (raw.status !== "done" || state.workEpochs?.[occurrence.occurrenceKey] !== this.observationEpoch) return { result: undefined, changed: false };
+      this.settle(state, occurrence, "completed", "herdr.event");
+      state.completionEpochs ??= {};
+      state.completionEpochs[occurrence.occurrenceKey] = this.observationEpoch;
+      return { result: undefined, changed: true };
     });
   }
 
-  async gap(reason: string, admission: SystemAdmission<"activity.observe">): Promise<void> {
+  degrade(admission: SystemAdmission<"activity.observe">): void {
     if (admission.scope !== "activity.observe") throw new Error("activity.observe scope required");
+    admission.assert();
     this.observation = "gap";
+    this.observationEpoch = randomUUID();
+  }
+
+  async gap(reason: string, admission: SystemAdmission<"activity.observe">): Promise<void> {
+    this.degrade(admission);
     await this.commit(admission, (state) => {
       this.observationEpoch = randomUUID();
-      for (const occurrence of state.occurrences.filter((item) => item.status === "active")) {
-        this.append(state, occurrence, "observation.gap", "daemon.observer", reason);
+      const latest = new Map(state.occurrences.map((item) => [item.paneId, item]));
+      for (const occurrence of latest.values()) {
+        this.append(state, occurrence, "observation.gap", "daemon.observer", reason, `${occurrence.occurrenceKey}:observation.gap:${this.observationEpoch}`);
         this.settle(state, occurrence, "unknown", "daemon.observer", "Observation gap: completion/failure cannot be recovered from snapshots");
       }
+      return { result: undefined, changed: latest.size > 0 };
     });
   }
 
@@ -183,7 +247,9 @@ export class ActivityLedger {
     if ("scope" in admission) return Promise.reject(new Error("Launch failure registration requires the original user admission"));
     return this.commit(admission, (state) => {
       const occurrence = state.occurrences.find((item) => item.occurrenceKey === occurrenceKey);
-      if (occurrence) this.settle(state, occurrence, "failed", "daemon.launch", reason);
+      if (!occurrence || occurrence.status !== "active") return { result: undefined, changed: false };
+      this.settle(state, occurrence, "failed", "daemon.launch", reason);
+      return { result: undefined, changed: true };
     });
   }
 
@@ -193,8 +259,7 @@ export class ActivityLedger {
     this.append(state, occurrence, `task.${status}`, source, detail);
   }
 
-  private append(state: LedgerState, occurrence: TaskOccurrence, kind: ActivityEvent["kind"], source: ActivityEvent["source"], detail?: string): void {
-    const dedupeKey = `${occurrence.occurrenceKey}:${kind}`;
+  private append(state: LedgerState, occurrence: TaskOccurrence, kind: ActivityEvent["kind"], source: ActivityEvent["source"], detail?: string, dedupeKey = `${occurrence.occurrenceKey}:${kind}`): void {
     if (state.events.some((event) => event.dedupeKey === dedupeKey)) return;
     state.events.push({ id: randomUUID(), sequence: (state.events.at(-1)?.sequence ?? 0) + 1, dedupeKey, kind, source, personaId: occurrence.personaId, paneId: occurrence.paneId, occurrenceKey: occurrence.occurrenceKey, occurredAt: new Date().toISOString(), ...(detail ? { detail } : {}) });
   }

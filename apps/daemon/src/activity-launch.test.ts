@@ -52,6 +52,22 @@ test("guarded user launch registers ownership before agent dispatch and observed
   } finally { f.observer.close(); await rm(f.root, { recursive: true, force: true }); }
 });
 
+test("locking after dispatched creation permits only bound result registration, never launcher input", async () => {
+  const f = await fixture();
+  try {
+    const create = f.runtime.herdr.createTab.bind(f.runtime.herdr);
+    f.runtime.herdr.createTab = async (...args) => { const pane = await create(...args); f.lock.lock(f.token, "test"); return pane; };
+    let inputs = 0;
+    f.runtime.herdr.sendText = async () => { inputs++; };
+    f.runtime.herdr.sendKeys = async () => { inputs++; };
+    await expect(launchPersonaTask(f.runtime, "a", "agent", null, f.admission)).rejects.toThrow("session.locked");
+    await f.observer.flush();
+    expect(inputs).toBe(0);
+    expect((await f.activity.ownership("p"))?.personaId).toBe("a");
+    expect((await f.activity.list()).events.map((event) => event.kind)).toEqual(["task.created", "task.unknown"]);
+  } finally { f.observer.close(); await rm(f.root, { recursive: true, force: true }); }
+});
+
 test("explicit launch rejection records one failure and a locked user creates no task", async () => {
   const f = await fixture(true);
   try {
