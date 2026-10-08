@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mapTaskStatuses, type Task } from "@homeling/contracts";
 import type { SnapshotResponse } from "@homeling/contracts";
-import { readConversationTasks, saveConversationTasks } from "./task-store.ts";
+import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 
 class MemoryStorage {
   #values = new Map<string, string>();
@@ -30,6 +30,15 @@ describe("conversation task session store", () => {
     const returnedTasks = readConversationTasks("thread-pane", storage);
     expect(returnedTasks).toEqual([{ ...task, status: "unknown" }]);
     expect(mapTaskStatuses(returnedTasks, snapshot)).toEqual([task]);
+  });
+
+  test("keeps persona task chips under a stable owner key after main-pane replacement", () => {
+    const storage = new MemoryStorage();
+    const oldKey = conversationTaskStorageKey("w1:p1", "persona-1");
+    const recoveredKey = conversationTaskStorageKey("w1:p3", "persona-1");
+    expect(recoveredKey).toBe(oldKey);
+    saveConversationTasks(oldKey, [task], storage);
+    expect(readConversationTasks(recoveredKey, storage)).toEqual([{ ...task, status: "unknown" }]);
   });
 
   test("isolates task metadata by conversation and never persists runtime status", () => {

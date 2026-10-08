@@ -49,6 +49,12 @@ describe("daemonConfigFromEnv", () => {
     );
   });
 
+  test("registry and Herdr socket paths are configurable", () => {
+    const c = daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: "/tmp/registry.json", HERDR_SOCKET_PATH: "/tmp/herdr.sock" });
+    expect(c.registryPath).toBe("/tmp/registry.json");
+    expect(c.herdrSocketPath).toBe("/tmp/herdr.sock");
+  });
+
   test("explicit env object wins over process.env", () => {
     withEnv({ HOMELING_PORT: "9001" }, () => {
       const c = daemonConfigFromEnv({ HOMELING_PORT: "9002" });

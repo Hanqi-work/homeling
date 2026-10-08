@@ -33,6 +33,16 @@ describe("TaskDetailPage", () => {
     expect(html).toContain('href="/p/w1%3Ap1"');
   });
 
+  test("returns a persona-owned task to the stable persona conversation route", () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter initialEntries={[{ pathname: "/t/w2:p1", state: { task, returnTo: "/persona/persona-1" } }]}>
+        <Routes><Route path="/t/:paneId" element={<TaskDetailPage />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(html).toContain('href="/persona/persona-1"');
+    expect(html).not.toContain('href="/p/');
+  });
+
   test("partial send locks B until retry succeeds, then restores composer without marking delivery", async () => {
     const queue = createTaskSendQueue();
     const requests: string[] = [];
