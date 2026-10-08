@@ -4,7 +4,9 @@ import { act } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { ConversationPage } from "./ConversationPage.tsx";
 import type { Root } from "react-dom/client";
-import { HomeTriage } from "./HomeTriage.tsx";
+import { HomeTriage, SessionAwareHomeTriage } from "./HomeTriage.tsx";
+import { AppRoot } from "./AppRoot.tsx";
+import { sessionState } from "./session-state.ts";
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -21,7 +23,7 @@ beforeAll(async () => {
   }
   ({ createRoot } = await import("react-dom/client"));
 });
-afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; });
+afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; sessionState.lock(); });
 afterAll(() => {
   for (const [key, descriptor] of saved) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -36,10 +38,12 @@ async function mount(suspended = false, pollIntervalMs = 10000) {
 }
 
 const activity = (paneId: string) => ({ observation: "live", events: [], occurrences: [{ occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8001", personaId: "mira", spaceId: mira.spaceId, paneId, title: "Build", createdAt: "2026-10-08", status: "active" }] });
+const taskLookup = (paneId: string, occurrenceKey = "3f0ec6a3-14db-40e5-a222-cade2e7f8001") => ({ occurrence: { ...activity(paneId).occurrences[0], occurrenceKey }, current: true, observation: "live", liveAvailable: true });
 
 test("home counts distinct registry personas, not requests, spaces, legacy or settled items; links target their actual conversations", async () => {
   globalThis.fetch = (async (url: RequestInfo | URL) => String(url).endsWith("persona/list")
     ? Response.json({ personas: [mira, { ...mira, id: "sol", name: "Sol", mainPaneId: "sol-main" }] })
+    : String(url).includes("/activity/task/") ? Response.json(taskLookup("task /1"))
     : String(url).endsWith("/activity") ? Response.json(activity("task /1"))
     : Response.json([request("1", "mira"), request("2", "mira", "task /1"), request("3", "sol", "sol-main"), request("4", "space-not-persona"), request("5", undefined), request("6", "unknown"), request("7", "mira", "main", "resolved"), request("8", "sol", "sol-main", "expired")])) as unknown as typeof fetch;
   await mount();
@@ -74,13 +78,16 @@ test("read failure is visible and preserves only an explicitly labelled last con
   expect(container.textContent).toContain("1 个伙伴需要你");
 });
 
-test.each(["settled-latest", "gap", "wrong-persona", "wrong-space", "read-failed"])("unconfirmed task %s retains persona count without exposing an unscoped writable link", async (scenario) => {
+test.each(["settled-latest", "reused-owner", "not-current", "not-live-available", "gap", "wrong-persona", "wrong-space", "read-failed"])("unconfirmed task %s retains persona count without exposing an unscoped writable link", async (scenario) => {
   const current = activity("task");
   globalThis.fetch = (async (url: RequestInfo | URL) => {
     if (String(url).endsWith("persona/list")) return Response.json({ personas: [mira] });
+    if (String(url).includes("/activity/task/")) return Response.json({ occurrence: current.occurrences[0], current: scenario !== "not-current", liveAvailable: scenario !== "not-live-available", observation: "live" });
     if (!String(url).endsWith("/activity")) return Response.json([request("task-request", "mira", "task")]);
     if (scenario === "read-failed") throw new Error("offline");
-    return Response.json({ ...current, observation: scenario === "gap" ? "gap" : "live", occurrences: scenario === "settled-latest"
+    return Response.json({ ...current, observation: scenario === "gap" ? "gap" : "live", occurrences: scenario === "reused-owner"
+      ? [...current.occurrences, { ...current.occurrences[0], occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002", personaId: "other-owner", spaceId: "other-space" }]
+      : scenario === "settled-latest"
       ? [...current.occurrences, { ...current.occurrences[0], occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002", createdAt: "2026-10-01", status: "completed" }]
       : [{ ...current.occurrences[0], personaId: scenario === "wrong-persona" ? "someone-else" : "mira", spaceId: scenario === "wrong-space" ? "legacy-space" : mira.spaceId }] });
   }) as unknown as typeof fetch;
@@ -93,6 +100,7 @@ test.each(["settled-latest", "gap", "wrong-persona", "wrong-space", "read-failed
 test("task lookup uses the newest append record even when its timestamp is older", async () => {
   const current = activity("task");
   globalThis.fetch = (async (url: RequestInfo | URL) => String(url).endsWith("persona/list") ? Response.json({ personas: [mira] })
+    : String(url).includes("/activity/task/") ? Response.json(taskLookup("task", "3f0ec6a3-14db-40e5-a222-cade2e7f8002"))
     : String(url).endsWith("/activity") ? Response.json({ ...current, occurrences: [...current.occurrences, { ...current.occurrences[0], occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002", createdAt: "2026-10-01" }] })
     : Response.json([request("task-request", "mira", "task")])) as unknown as typeof fetch;
   await mount();
@@ -174,14 +182,48 @@ test("unlock waits for a fresh triage read rather than flashing a pre-lock pendi
   expect(container.querySelector("section")).toBeNull();
 });
 
+test("production AppRoot really suspends triage on server lock and until read-only unlock catch-up completes", async () => {
+  sessionState.lock();
+  let pendingReads = 0;
+  let finishSnapshot!: (response: Response) => void;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/session")) return Response.json({ locked: true, epoch: 1, available: true });
+    if (path.endsWith("/session/unlock")) return Response.json({ locked: false, epoch: 2, generation: "boot" });
+    if (path.endsWith("persona/list")) return Response.json({ personas: [mira] });
+    if (path.endsWith("requests")) { pendingReads++; expect(init?.method ?? "GET").toBe("GET"); return Response.json([request("needs-you", "mira")]); }
+    if (path.endsWith("snapshot")) return new Promise<Response>((resolve) => { finishSnapshot = resolve; });
+    return Response.json({ paneId: "main", available: false, reason: "no-log" });
+  }) as unknown as typeof fetch;
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root.render(<MemoryRouter><AppRoot slots={{ homeSummary: <SessionAwareHomeTriage /> }} /></MemoryRouter>));
+  expect(pendingReads).toBe(0);
+  const input = container.querySelector('input[type="password"]')! as HTMLInputElement;
+  input.value = "x".repeat(43);
+  await act(async () => container.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  expect(sessionState.get().locked).toBe(false);
+  expect(sessionState.get().ready).toBe(false);
+  expect(pendingReads).toBe(1); // SessionBoundary catch-up only; triage is still suspended.
+  expect(container.textContent).not.toContain("1 个伙伴需要你");
+  await act(async () => finishSnapshot(Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] })));
+  expect(sessionState.get().ready).toBe(true);
+  expect(pendingReads).toBe(2);
+  expect(container.textContent).toContain("1 个伙伴需要你");
+  await act(async () => sessionState.lock());
+  expect(container.textContent).not.toContain("1 个伙伴需要你");
+  expect(pendingReads).toBe(2);
+});
+
 for (const kind of ["task", "main"] as const) {
   test(`summary ${kind} link reaches the actual pane approval card, main identity follows rebuilt registry pane`, async () => {
+    sessionState.apply({ locked: false, epoch: 2, generation: "boot" }); sessionState.caughtUp();
     const target = kind === "task" ? "task /1" : "rebuilt-main";
     const paths: string[] = [];
     globalThis.fetch = (async (url: RequestInfo | URL) => {
       const path = String(url); paths.push(path);
       if (path.endsWith("persona/list")) return Response.json({ personas: [{ ...mira, mainPaneId: "rebuilt-main" }] });
       if (path.endsWith("requests")) return Response.json([{ ...request("target", "mira", target), payload: { question: "Target permission", options: [{ id: "yes", label: "Allow target" }] } }, request("other", "mira", "other-pane")]);
+      if (path.includes("/activity/task/")) return Response.json(taskLookup(target));
       if (path.endsWith("/activity")) return Response.json(activity(target));
       if (path.endsWith("snapshot")) return Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] });
       if (path.endsWith("launchers")) return Response.json({ launchers: [] });

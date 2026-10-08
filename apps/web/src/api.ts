@@ -1,10 +1,20 @@
-import type { ActivityResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { ActivityResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse, TaskOccurrence } from "@homeling/contracts";
+
+import { sessionState } from "./session-state.ts";
+
+/** UI admission complements, never replaces, the daemon cookie/epoch gate. */
+export async function sessionMutationFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  try { sessionState.admit()(); } catch { throw new ReplyRequestError("Unlock Homeling and confirm this action", false); }
+  const response = await fetch(input, init);
+  if (response.status === 423) sessionState.lock();
+  return response;
+}
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
 /** Raw audio in, editable text out. This endpoint is deliberately pane-agnostic. */
 export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(`${API_PREFIX}stt`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}stt`, {
     method: "POST", body: audio,
     headers: { accept: "application/json", "content-type": audio.type || "audio/webm" },
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
@@ -48,8 +58,12 @@ export function fetchPersonaActivity(personaId: string, signal?: AbortSignal): P
   return getJson(`persona/${encodeURIComponent(personaId)}/activity`, signal);
 }
 
+export function fetchActivityTask(occurrenceKey: string, signal?: AbortSignal): Promise<{ occurrence: TaskOccurrence; current: boolean; observation: ActivityResponse["observation"]; liveAvailable: boolean }> {
+  return getJson(`activity/task/${encodeURIComponent(occurrenceKey)}`, signal);
+}
+
 export async function createPersona(input: { name: string; avatar: { color: string }; systemPrompt?: string }): Promise<PersonaView> {
-  const response = await fetch(`${API_PREFIX}persona`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}persona`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -72,28 +86,29 @@ export class PersonaDeleteError extends Error {
 }
 
 export async function deletePersona(personaId: string): Promise<PersonaDeleteResult> {
-  const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+  try { sessionState.admit()(); } catch { throw new PersonaDeleteError("Unlock Homeling before deleting", true); }
+  const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
     method: "DELETE", headers: { accept: "application/json", "content-type": "application/json" }, body: "{}",
   });
-  const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string }) | null;
+  const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string; executed?: boolean; deliveryUnknown?: boolean }) | null;
   if (!response.ok || typeof result?.deleted !== "boolean" || typeof result.archived !== "boolean") {
-    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423);
+    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423 && result?.executed === false && result.deliveryUnknown === false);
   }
   return { deleted: result.deleted, archived: result.archived };
 }
 
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
-  const response = await fetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean; personaConfirmationText?: string } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean; personaConfirmationText?: string } = {};
   try { result = await response.json() as typeof result; } catch { /* use HTTP fallback */ }
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `message ${response.status}`,
-      typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
       result.personaConfirmationText,
     );
   }
@@ -118,7 +133,7 @@ export async function launchTask(launcher: Launcher, paneId?: string, personaId?
     : paneId === undefined
       ? { command: launcher.command }
       : { command: launcher.command, paneId };
-  const response = await fetch(`${API_PREFIX}launch`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}launch`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -146,18 +161,21 @@ export interface ApprovalResponse {
 }
 
 export async function approvePendingRequest(requestId: string, optionId: string): Promise<ApprovalResponse> {
-  const response = await fetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ optionId }),
   });
-  let result: ApprovalResponse | null = null;
+  let result: (ApprovalResponse & { deliveryUnknown?: boolean }) | null = null;
   try {
     result = await response.json() as ApprovalResponse;
   } catch {
     // The status below still distinguishes a stale request from a failed network write.
   }
-  if (result) return result;
+  if (response.status === 423) return result?.deliveryUnknown === true
+    ? { status: "resolved", outcome: "unknown" }
+    : { status: "pending", outcome: "not-submitted" };
+  if (result && ["pending", "resolved", "expired"].includes(result.status)) return result;
   throw new Error(`approval ${response.status}`);
 }
 
@@ -179,7 +197,7 @@ export function fetchPaneScreen(paneId: string, signal?: AbortSignal): Promise<P
 }
 
 export async function stopPaneTask(paneId: string): Promise<void> {
-  const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: "{}",
@@ -202,7 +220,7 @@ export interface ControlKeyResult {
 /** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
 export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string): Promise<ControlKeyResult> {
   try {
-    const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
+    const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
       method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
     });
@@ -214,8 +232,12 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
         return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
       }
     }
+    if (response.status === 423 && value && typeof value === "object") {
+      return { outcome: (value as { deliveryUnknown?: boolean }).deliveryUnknown === true ? "unknown" : "not-submitted", error: "Unlock Homeling before controlling the pane" };
+    }
     return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
-  } catch {
+  } catch (error) {
+    if (error instanceof ReplyRequestError && error.textDelivered === false) return { outcome: "not-submitted", error: error.message };
     return { outcome: "unknown", error: "Network lost or timed out; do not repeat the key" };
   }
 }
@@ -233,12 +255,12 @@ export class ReplyRequestError extends Error {
 
 /** Submit text to an existing Collie pane; history polling, not this response, confirms delivery. */
 export async function sendPaneReply(paneId: string, text: string): Promise<void> {
-  const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/reply`, {
+  const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/reply`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text, submit: true }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean } = {};
   try {
     result = await response.json() as typeof result;
   } catch {
@@ -247,7 +269,7 @@ export async function sendPaneReply(paneId: string, text: string): Promise<void>
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `reply ${response.status}`,
-      typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
     );
   }
 }

@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleRequest } from "./index.ts";
+import { handleUnlockedRequest as handleRequest, fixtureAdmission, fixtureRecovery } from "./session-test-fixture.ts";
 import { HerdrSocketClient, type HerdrPane } from "./herdr-client.ts";
 import type { DaemonConfig } from "./config.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
@@ -169,9 +169,11 @@ async function fixture(options: { failSendKeys?: boolean; failFirstReplyPartial?
 }
 
 function request(path: string, options: { method?: string; body?: string; contentType?: string; host?: string; origin?: string; remoteAddress?: string; login?: string } = {}) {
-  const headers = new Headers({ host: options.host ?? "localhost:8790" });
+  const headers = new Headers({ host: options.host ?? "homeling.tail1234.ts.net" });
+  if (!options.remoteAddress && !options.host && !options.login) headers.set("tailscale-user-login", "me@github.com");
   if (options.contentType) headers.set("content-type", options.contentType);
   if (options.origin) headers.set("origin", options.origin);
+  else if (!options.remoteAddress && !options.host) headers.set("origin", "https://homeling.tail1234.ts.net");
   if (options.login) headers.set("tailscale-user-login", options.login);
   return Object.assign(new Request(`http://daemon.test${path}`, {
     method: options.method ?? "GET", headers,
@@ -180,6 +182,15 @@ function request(path: string, options: { method?: string; body?: string; conten
 }
 
 describe("persona creation loop over an in-memory Herdr socket", () => {
+  test("a read-created cached runtime never retains a prior request's admission", async () => {
+    const { cfg, fetcher, deliveries } = await fixture();
+    expect((await handleRequest(request("/lite/api/persona/list"), cfg, fetcher)).status).toBe(200);
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher);
+    const { persona } = await created.json() as { persona: { id: string } };
+    const sent = await handleRequest(request(`/lite/api/persona/${persona.id}/message`, { method: "POST", contentType: "application/json", body: JSON.stringify({ text: "hello" }) }), cfg, fetcher);
+    expect(sent.status).toBe(200);
+    expect(deliveries).toHaveLength(1);
+  });
   test("persona message routing cannot bypass an unknown cancellation on its latest main pane", async () => {
     const { cfg, deliveries, fetcher, runtime } = await fixture();
     const created = await handleRequest(request("/lite/api/persona", {
@@ -243,6 +254,7 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     }
 
     state.panes = state.panes.filter((item) => item.pane_id !== persona.mainPaneId);
+    await recoverPersonas(runtime, fixtureRecovery);
     const recoveredList = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
     expect((await recoveredList.json() as { personas: Array<{ mainPaneId: string }> }).personas[0]?.mainPaneId).toBe("w1:p3");
     expect(await runtime.registry.get(persona.id)).toMatchObject({ mainPaneId: "w1:p3", spaceId: "w1", systemPromptInjected: false });
@@ -279,6 +291,7 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     state.actions = [];
     state.readScreens = ["", "Starting shell", "$ ", "$ "];
     state.panes = state.panes.filter((item) => item.pane_id !== persona.mainPaneId);
+    await recoverPersonas(runtime, fixtureRecovery);
     await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
     expect(state.actions.filter((action) => action !== "snapshot").slice(0, 5)).toEqual(["pane_read", "pane_read", "pane_read", "pane_read", "send_text"]);
   });
@@ -301,6 +314,7 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     expect(state.text).toEqual([{ paneId: "w1:p1", text: "agent --start" }]);
 
     state.panes = [];
+    await recoverPersonas(restarted, fixtureRecovery);
     await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, restarted);
     expect(await restarted.registry.get(persona.id)).toMatchObject({ spaceId: "w1", mainPaneId: "w1:p2", systemPromptInjected: false });
     expect(state.tabs.at(-1)?.workspace_id).toBe("w1");
@@ -373,7 +387,7 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     state.panes = state.panes.filter((item) => item.pane_id !== persona.mainPaneId);
     setLaunchers([{ command: "different-agent --start", label: "Different agent", cwd: "/home/test" }]);
 
-    await recoverPersonas(runtime);
+    await recoverPersonas(runtime, fixtureRecovery);
     const recovered = await runtime.registry.get(persona.id);
     expect(recovered).toMatchObject({ mainPaneId: "w1:p1", launcherCommand: "agent --start", needsAttention: "launcher_not_allowlisted" });
     expect(state.text).toEqual([{ paneId: "w1:p1", text: "agent --start" }]);
@@ -491,9 +505,9 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
         return fetcher(input, init);
       },
     };
-    const sending = sendPersonaMessage(delayedRuntime, persona.id, "hello");
+    const sending = sendPersonaMessage(delayedRuntime, persona.id, "hello", null, fixtureAdmission());
     await started;
-    const deleting = deletePersona(delayedRuntime, persona.id);
+    const deleting = deletePersona(delayedRuntime, persona.id, fixtureAdmission());
     release();
     await Promise.all([sending, deleting]);
     expect(await runtime.registry.get(persona.id)).toBeUndefined();
@@ -507,7 +521,7 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
       body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }),
     }), cfg, fetcher, runtime);
     const { persona } = await created.json() as { persona: { id: string } };
-    const observer = createEventObserver(runtime);
+    const observer = createEventObserver(runtime, fixtureRecovery);
     await new Promise((resolve) => setTimeout(resolve, 20));
     const deleted = await handleRequest(request(`/lite/api/persona/${persona.id}`, { method: "DELETE" }), cfg, fetcher, runtime);
     await new Promise((resolve) => setTimeout(resolve, 20));

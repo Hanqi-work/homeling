@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { PendingRequest, PersonaView } from "@homeling/contracts";
-import { fetchPendingRequests, fetchPersonas, fetchPersonaActivity } from "./api.ts";
+import { fetchActivityTask, fetchPendingRequests, fetchPersonas, fetchPersonaActivity } from "./api.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
+import { useSessionSnapshot } from "./SessionBoundary.tsx";
+
+export function SessionAwareHomeTriage() {
+  const session = useSessionSnapshot();
+  return <HomeTriage suspended={session.locked || !session.ready} />;
+}
 
 interface TriageData {
   readonly personas: readonly PersonaView[];
@@ -35,8 +41,12 @@ export function HomeTriage({ suspended = false, pollIntervalMs = 2000 }: { suspe
               if (activity.observation !== "live") return;
               for (const request of requests) {
                 if (request.personaId !== persona.id || request.status !== "pending") continue;
-                const occurrence = [...activity.occurrences].reverse().find((item) => item.personaId === persona.id && item.spaceId === persona.spaceId && item.paneId === request.paneId);
-                if (occurrence?.status === "active") taskLinks.set(request.id, `/p/${encodeURIComponent(request.paneId)}?occurrence=${encodeURIComponent(occurrence.occurrenceKey)}`);
+                const occurrence = [...activity.occurrences].reverse().find((item) => item.paneId === request.paneId);
+                if (occurrence?.status !== "active" || occurrence.personaId !== persona.id || occurrence.spaceId !== persona.spaceId) continue;
+                const task = await fetchActivityTask(occurrence.occurrenceKey, signal);
+                if (task.current && task.liveAvailable && task.observation === "live" && task.occurrence.occurrenceKey === occurrence.occurrenceKey && task.occurrence.paneId === request.paneId && task.occurrence.personaId === persona.id && task.occurrence.spaceId === persona.spaceId && task.occurrence.status === "active") {
+                  taskLinks.set(request.id, `/p/${encodeURIComponent(request.paneId)}?occurrence=${encodeURIComponent(occurrence.occurrenceKey)}`);
+                }
               }
             } catch {
               // Unconfirmed task ownership never falls back to an unscoped writable pane.

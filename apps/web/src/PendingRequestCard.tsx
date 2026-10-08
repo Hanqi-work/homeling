@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactElement } from "react";
 import type { PendingRequest, PendingRequestStatus } from "@homeling/contracts";
-import type { ApprovalResponse } from "./api.ts";
+import { ReplyRequestError, type ApprovalResponse } from "./api.ts";
 import { createSingleFlightApproval } from "./approval-guard.ts";
 
 export interface PendingRequestCardProps {
@@ -44,7 +44,11 @@ export function PendingRequestCard({ request, onApprove, onSettled }: PendingReq
       setStatus(nextStatus);
       setUncertain(unknown);
       onSettled?.({ ...request, status: nextStatus });
-    } catch {
+    } catch (error) {
+      if (error instanceof ReplyRequestError && error.textDelivered === false) {
+        setMessage("已锁定，尚未提交；解锁后请确认再操作");
+        return;
+      }
       // The upstream may have accepted a key before the connection failed: never enable a duplicate tap.
       setStatus("resolved");
       setUncertain(true);
