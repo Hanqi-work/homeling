@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { handleRequest } from "./index.ts";
+import { handleUnlockedRequest as handleRequest } from "./session-test-fixture.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 
 const ROOT = join(import.meta.dir, ".tmp-server-fixture");
@@ -34,6 +34,11 @@ function req(opts: {
   if (opts.host !== undefined) headers.set("host", opts.host);
   if (opts.login !== undefined) headers.set("tailscale-user-login", opts.login);
   if (opts.origin !== undefined) headers.set("origin", opts.origin);
+  else if (opts.method && opts.method !== "GET" && opts.remoteAddress === "127.0.0.1" && opts.host === "localhost:8790") {
+    headers.set("host", TAILSCALE_HOST);
+    headers.set("tailscale-user-login", opts.login ?? "me@github.com");
+    headers.set("origin", `https://${TAILSCALE_HOST}`);
+  }
   if (opts.contentType !== undefined) headers.set("content-type", opts.contentType);
   return Object.assign(
     new Request(`https://placeholder${opts.path ?? "/lite/"}`, {
@@ -160,7 +165,7 @@ describe("handleRequest — routing", () => {
     expect(forwarded).toHaveLength(1);
   });
 
-  test("reply requires the tailnet Origin through a proxy, while direct loopback can omit it", async () => {
+  test("reply requires the tailnet Origin even for direct loopback", async () => {
     let calls = 0;
     const fetcher: BridgeFetch = async () => { calls += 1; return Response.json({ ok: true }); };
     const reply = { path: "/lite/api/pane/w1:p2/reply", method: "POST", contentType: "application/json", body: '{"text":"hi"}' };
@@ -182,10 +187,10 @@ describe("handleRequest — routing", () => {
     }
 
     const directLoopback = await handleRequest(req({
-      remoteAddress: "127.0.0.1", host: "localhost:8790", ...reply,
+      remoteAddress: "127.0.0.1", host: "localhost:8790", origin: "", ...reply,
     }), CFG, fetcher);
-    expect(directLoopback.status).toBe(200);
-    expect(calls).toBe(1);
+    expect(directLoopback.status).toBe(403);
+    expect(calls).toBe(0);
   });
 
   test("GET /lite/ serves the SPA index", async () => {

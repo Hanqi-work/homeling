@@ -1,3 +1,5 @@
+import { SessionLocked, lockedResponse, type MutationAdmission } from "./session-lock.ts";
+import type { SystemAdmission } from "./system-admission.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 import type { DaemonConfig } from "./config.ts";
 import { HerdrRpcError, type HerdrCreatedSpace, type HerdrPane, type HerdrPort, type HerdrSnapshot } from "./herdr-client.ts";
@@ -65,26 +67,28 @@ export async function getLaunchers(cfg: DaemonConfig, fetcher: BridgeFetch, logi
   return { launchers, home: body.home };
 }
 
-async function startLauncher(runtime: PersonaRuntime, launcher: Launcher, paneId: string): Promise<void> {
+async function startLauncher(runtime: PersonaRuntime, launcher: Launcher, paneId: string, admission: MutationAdmission): Promise<void> {
   const ready = await awaitPaneReady(runtime.herdr, paneId);
   if (!ready.ready) throw new HerdrRpcError("herdr.pane_not_ready", `Shell pane ${paneId} was not ready after ${ready.ms}ms`);
-  await runtime.herdr.sendText(paneId, launcher.command);
-  await runtime.herdr.sendKeys(paneId, ["Enter"]);
+  await admission.dispatch(() => runtime.herdr.sendText(paneId, launcher.command));
+  await admission.dispatch(() => runtime.herdr.sendKeys(paneId, ["Enter"]));
   await awaitAgentReady(runtime.herdr, paneId);
 }
 
 export async function createPersona(
   runtime: PersonaRuntime,
   input: { name: string; avatar: PersonaAvatar; systemPrompt?: string; launcherCommand?: string },
-  login?: string | null,
+  login: string | null,
+  admission: MutationAdmission,
 ): Promise<Persona> {
+  admission.assert();
   const launchers = await getLaunchers(runtime.cfg, runtime.fetcher, login);
   const launcher = launchers.launchers.find((row) => row.command === input.launcherCommand) ??
     (input.launcherCommand ? undefined : launchers.launchers[0]);
   if (!launcher) throw new Error(input.launcherCommand ? "Launcher is not allowlisted" : "No launchers are allowlisted");
   let space: HerdrCreatedSpace;
   try {
-    space = await runtime.herdr.createSpace(input.name, launcher.cwd ?? launchers.home);
+    space = await admission.dispatch(() => runtime.herdr.createSpace(input.name, launcher.cwd ?? launchers.home));
   } catch (error) {
     if (error instanceof HerdrRpcError && ["herdr.timeout", "herdr.unavailable", "herdr.protocol"].includes(error.code)) {
       await runtime.registry.addOrphan({
@@ -96,7 +100,7 @@ export async function createPersona(
     throw error;
   }
   try {
-    await startLauncher(runtime, launcher, space.root_pane.pane_id);
+    await startLauncher(runtime, launcher, space.root_pane.pane_id, admission);
   } catch (error) {
     let rollbackError = "";
     try {
@@ -126,7 +130,7 @@ export async function createPersona(
     launcherCommand: launcher.command,
   };
   try {
-    await runtime.registry.createPersona(persona);
+    await runtime.registry.createPersona(persona, admission);
   } catch (error) {
     let paneStillOpen = false;
     try {
@@ -146,7 +150,6 @@ export async function createPersona(
 }
 
 export async function listPersonas(runtime: PersonaRuntime): Promise<readonly (Persona & { status: string })[]> {
-  await recoverPersonas(runtime);
   const [personas, snapshot] = await Promise.all([runtime.registry.list(), runtime.herdr.snapshot()]);
   return personas.map((persona) => ({ ...persona, status: statusOf(persona, snapshot) }));
 }
@@ -155,14 +158,16 @@ export function updatePersona(
   runtime: PersonaRuntime,
   id: string,
   patch: { name?: string; avatar?: PersonaAvatar; systemPrompt?: string; paused?: boolean },
+  admission: MutationAdmission,
 ): Promise<Persona | undefined> {
   return withPersonaLock(runtime, id, async () => {
+    admission.assert();
     const current = await runtime.registry.get(id);
     if (!current) return undefined;
     const renamed = patch.name !== undefined && patch.name !== current.name;
-    if (renamed) await runtime.herdr.renameSpace(current.spaceId, patch.name!);
+    if (renamed) await admission.dispatch(() => runtime.herdr.renameSpace(current.spaceId, patch.name!));
     try {
-      const updated = await runtime.registry.patchPersona(id, patch);
+      const updated = await runtime.registry.patchPersona(id, patch, admission);
       if (!updated && renamed) await runtime.herdr.renameSpace(current.spaceId, current.name);
       return updated;
     } catch (error) {
@@ -177,8 +182,9 @@ export function updatePersona(
   });
 }
 
-export function deletePersona(runtime: PersonaRuntime, id: string): Promise<{ deleted: boolean; archived: boolean }> {
+export function deletePersona(runtime: PersonaRuntime, id: string, admission: MutationAdmission): Promise<{ deleted: boolean; archived: boolean }> {
   return withPersonaLock(runtime, id, async () => {
+    admission.assert();
     let suppressed = suppressedRecoveryIds.get(runtime);
     if (!suppressed) {
       suppressed = new Set();
@@ -189,18 +195,20 @@ export function deletePersona(runtime: PersonaRuntime, id: string): Promise<{ de
       const persona = await runtime.registry.get(id);
       if (!persona) return { deleted: false, archived: false };
       try {
-        await runtime.herdr.closePane(persona.mainPaneId);
+        await admission.dispatch(() => runtime.herdr.closePane(persona.mainPaneId));
       } catch (error) {
         if (!(error instanceof HerdrRpcError) || error.code !== "pane_not_found") throw error;
       }
       const archivedAt = new Date().toISOString();
       let archived = true;
       try {
-        await runtime.herdr.renameSpace(persona.spaceId, `[Archived] ${persona.name}`);
+        await admission.dispatch(() => runtime.herdr.renameSpace(persona.spaceId, `[Archived] ${persona.name}`));
       } catch (error) {
         archived = false;
         console.error(`[homeling-daemon] persona deleted but space archive rename failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+      // Result settlement for this already-closed pane must persist its tombstone even if the
+      // initiating lease expired, otherwise system recovery could resurrect the deleted persona.
       await runtime.registry.removePersona(id, { spaceId: persona.spaceId, personaName: persona.name, archivedAt });
       return { deleted: true, archived };
     } finally {
@@ -213,9 +221,11 @@ export function sendPersonaMessage(
   runtime: PersonaRuntime,
   id: string,
   text: string,
-  login?: string | null,
+  login: string | null,
+  admission: MutationAdmission,
 ): Promise<Response> {
   return withPersonaLock(runtime, id, async () => {
+    admission.assert();
     const persona = await runtime.registry.get(id);
     if (!persona) return Response.json({ error: "persona not found" }, { status: 404 });
     if (persona.paused) return Response.json({ error: "persona paused" }, { status: 409 });
@@ -226,11 +236,12 @@ export function sendPersonaMessage(
       : text;
     let response: Response;
     try {
-      response = await runtime.fetcher(
+      response = await admission.dispatch(() => runtime.fetcher(
         `${runtime.cfg.bridgeOrigin}/api/pane/${encodeURIComponent(persona.mainPaneId)}/reply`,
         { method: "POST", headers, body: JSON.stringify({ text: submittedText, submit: true }) },
-      );
+      ));
     } catch (error) {
+      if (error instanceof SessionLocked) return lockedResponse();
       return Response.json({
         ok: false, deliveryUnknown: true, personaConfirmationText: submittedText,
         error: error instanceof Error ? error.message : "Message delivery outcome unknown",
@@ -261,9 +272,11 @@ export function launchPersonaTask(
   runtime: PersonaRuntime,
   personaId: string,
   command: string,
-  login?: string | null,
+  login: string | null,
+  admission: MutationAdmission,
 ): Promise<Response> {
   return withPersonaLock(runtime, personaId, async () => {
+    admission.assert();
     const persona = await runtime.registry.get(personaId);
   if (!persona) return Response.json({ ok: false, error: "persona not found", code: "persona.not_found" }, { status: 404 });
   if (persona.paused) return Response.json({ ok: false, error: "persona paused", code: "persona.paused" }, { status: 409 });
@@ -278,8 +291,8 @@ export function launchPersonaTask(
   if (!launcher) return Response.json({ ok: false, error: "Launcher is not allowlisted", code: "launch.not_allowlisted" }, { status: 400 });
   let tabPane: HerdrPane | undefined;
   try {
-    tabPane = await runtime.herdr.createTab(persona.spaceId, launcher.cwd);
-    await startLauncher(runtime, launcher, tabPane.pane_id);
+    tabPane = await admission.dispatch(() => runtime.herdr.createTab(persona.spaceId, launcher.cwd));
+    await startLauncher(runtime, launcher, tabPane.pane_id, admission);
   } catch (error) {
     let paneStillOpen = false;
     if (tabPane) {
@@ -309,10 +322,10 @@ export function launchPersonaTask(
 const recoveryRuns = new WeakMap<PersonaRuntime, Promise<void>>();
 const suppressedRecoveryIds = new WeakMap<PersonaRuntime, Set<string>>();
 
-export function recoverPersonas(runtime: PersonaRuntime): Promise<void> {
+export function recoverPersonas(runtime: PersonaRuntime, admission: SystemAdmission<"persona.recovery">): Promise<void> {
   const running = recoveryRuns.get(runtime);
   if (running) return running;
-  const current = performRecovery(runtime);
+  const current = performRecovery(runtime, admission);
   recoveryRuns.set(runtime, current);
   void current.then(
     () => { if (recoveryRuns.get(runtime) === current) recoveryRuns.delete(runtime); },
@@ -321,18 +334,18 @@ export function recoverPersonas(runtime: PersonaRuntime): Promise<void> {
   return current;
 }
 
-async function recoverPersona(runtime: PersonaRuntime, id: string): Promise<void> {
+async function recoverPersona(runtime: PersonaRuntime, id: string, admission: SystemAdmission<"persona.recovery">): Promise<void> {
   await withPersonaLock(runtime, id, async () => {
     if (suppressedRecoveryIds.get(runtime)?.has(id)) return;
     const persona = await runtime.registry.get(id);
     if (!persona) return;
     const snapshot = await runtime.herdr.snapshot();
     if (snapshot.panes.some((pane) => pane.pane_id === persona.mainPaneId)) {
-      if (persona.needsAttention) await runtime.registry.patchPersona(id, { needsAttention: undefined });
+      if (persona.needsAttention) await runtime.registry.patchPersona(id, { needsAttention: undefined }, admission);
       return;
     }
     if (!snapshot.workspaces.some((workspace) => workspace.workspace_id === persona.spaceId)) {
-      await runtime.registry.patchPersona(id, { needsAttention: "space_missing" });
+      await runtime.registry.patchPersona(id, { needsAttention: "space_missing" }, admission);
       return;
     }
 
@@ -344,20 +357,20 @@ async function recoverPersona(runtime: PersonaRuntime, id: string): Promise<void
     }
     const launcher = launchers.launchers.find((item) => item.command === persona.launcherCommand);
     if (!launcher) {
-      await runtime.registry.patchPersona(id, { needsAttention: "launcher_not_allowlisted" });
+      await runtime.registry.patchPersona(id, { needsAttention: "launcher_not_allowlisted" }, admission);
       return;
     }
 
     let recoveredPane: HerdrPane | undefined;
     try {
-      recoveredPane = await runtime.herdr.createTab(persona.spaceId, launcher.cwd);
-      await startLauncher(runtime, launcher, recoveredPane.pane_id);
+      recoveredPane = await admission.dispatch(() => runtime.herdr.createTab(persona.spaceId, launcher.cwd));
+      await startLauncher(runtime, launcher, recoveredPane.pane_id, admission);
       const updated = await runtime.registry.patchPersona(id, {
         mainPaneId: recoveredPane.pane_id,
         launcherCommand: launcher.command,
         systemPromptInjected: false,
         needsAttention: undefined,
-      });
+      }, admission);
       if (!updated) throw new Error("persona was deleted during recovery");
     } catch (error) {
       let paneStillOpen = false;
@@ -375,24 +388,24 @@ async function recoverPersona(runtime: PersonaRuntime, id: string): Promise<void
   });
 }
 
-async function performRecovery(runtime: PersonaRuntime): Promise<void> {
+async function performRecovery(runtime: PersonaRuntime, admission: SystemAdmission<"persona.recovery">): Promise<void> {
   const snapshot = await runtime.herdr.snapshot();
   const registry = await runtime.registry.load();
   for (const archived of registry.archivedSpaces) {
     const workspace = snapshot.workspaces.find((item) => item.workspace_id === archived.spaceId);
     if (!workspace || workspace.label.startsWith("[Archived]")) continue;
-    try { await runtime.herdr.renameSpace(archived.spaceId, `[Archived] ${archived.personaName}`); }
+    try { await admission.dispatch(() => runtime.herdr.renameSpace(archived.spaceId, `[Archived] ${archived.personaName}`)); }
     catch (error) { console.error(`[homeling-daemon] could not mark archived space ${archived.spaceId}: ${error instanceof Error ? error.message : String(error)}`); }
   }
-  for (const persona of await runtime.registry.list()) await recoverPersona(runtime, persona.id);
+  for (const persona of await runtime.registry.list()) await recoverPersona(runtime, persona.id, admission);
 }
 
-export function createEventObserver(runtime: PersonaRuntime): { close(): void } {
+export function createEventObserver(runtime: PersonaRuntime, admission: SystemAdmission<"persona.recovery">): { close(): void } {
   let closed = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let stream: { close(): void } | undefined;
   const reconcile = () => {
-    void recoverPersonas(runtime).catch((error: unknown) => {
+    void recoverPersonas(runtime, admission).catch((error: unknown) => {
       console.error(`[homeling-daemon] persona reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   };
