@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createPersona, fetchLaunchers, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage } from "./api.ts";
+import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -74,6 +74,28 @@ describe("persona API", () => {
       { url: "/lite/api/persona", method: "POST", body: '{"name":"Mira","avatar":{"color":"#86efac"}}' },
       { url: "/lite/api/persona/persona-1/message", method: "POST", body: '{"text":"hello"}' },
     ]);
+  });
+});
+
+describe("task detail APIs", () => {
+  test("reads the current pane screen over the same-origin daemon API", async () => {
+    let url = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      url = String(input);
+      return Response.json({ paneId: "w1:p2", text: "screen", truncated: false });
+    }) as unknown as typeof fetch;
+    await expect(fetchPaneScreen("w1:p2")).resolves.toMatchObject({ text: "screen" });
+    expect(url).toBe("/lite/api/pane/w1%3Ap2");
+  });
+
+  test("posts a semantic stop request without accepting caller-supplied keys", async () => {
+    const requests: Array<{ url: string; method: string; body: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), method: init?.method ?? "", body: String(init?.body) });
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    await stopPaneTask("w1:p2");
+    expect(requests).toEqual([{ url: "/lite/api/pane/w1%3Ap2/stop", method: "POST", body: "{}" }]);
   });
 });
 

@@ -5,6 +5,7 @@ import { App } from "./App.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 
 const ConversationPage = lazy(() => import("./ConversationPage.tsx").then((module) => ({ default: module.ConversationPage })));
+const TaskDetailPage = lazy(() => import("./TaskDetailPage.tsx").then((module) => ({ default: module.TaskDetailPage })));
 import "./index.css";
 
 registerServiceWorker((handle) => {
@@ -23,7 +24,9 @@ createRoot(root).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/p/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
+        <Route path="/persona/:personaId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
         <Route path="/persona/:personaId/p/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading conversation…</main>}><ConversationPage /></Suspense>} />
+        <Route path="/t/:paneId" element={<Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading task…</main>}><TaskDetailPage /></Suspense>} />
         <Route path="*" element={<App />} />
       </Routes>
     </BrowserRouter>

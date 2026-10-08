@@ -98,7 +98,7 @@ export async function handleRequest(
 
   const { pathname } = new URL(req.url);
   const isBridgeWritePost = req.method === "POST" && (
-    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys)$/.test(pathname)
+    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop)$/.test(pathname)
   );
   const isApprovalPost = req.method === "POST" && /^\/lite\/api\/requests\/[^/]+\/approve$/.test(pathname);
   const isPersonaWriteRequest = isPersonaWrite(pathname) && req.method !== "GET";

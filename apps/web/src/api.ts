@@ -115,6 +115,33 @@ export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: 
   return getJson(`pane/${encodeURIComponent(paneId)}/history${cursor}`, signal);
 }
 
+export interface PaneReadResponse {
+  readonly paneId: string;
+  readonly text: string;
+  readonly truncated?: boolean;
+  readonly revision?: number;
+}
+
+/** Read the bounded current pane screen; this is not a terminal control channel. */
+export function fetchPaneScreen(paneId: string, signal?: AbortSignal): Promise<PaneReadResponse> {
+  return getJson(`pane/${encodeURIComponent(paneId)}`, signal);
+}
+
+export async function stopPaneTask(paneId: string): Promise<void> {
+  const response = await fetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/stop`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: "{}",
+  });
+  let result: { ok?: boolean; error?: string } = {};
+  try {
+    result = await response.json() as typeof result;
+  } catch {
+    // Preserve an HTTP-level error when the bridge is unavailable.
+  }
+  if (!response.ok || result.ok !== true) throw new Error(result.error ?? `stop ${response.status}`);
+}
+
 export class ReplyRequestError extends Error {
   constructor(
     message: string,

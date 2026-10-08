@@ -421,7 +421,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
             {visibleTasks.length > 0 ? (
               <ul aria-label="任务" className="mt-2 flex flex-col gap-2">
-                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} />)}
+                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={`/p/${encodeURIComponent(paneId)}`} />)}
               </ul>
             ) : null}
           </ThreadPrimitive.Viewport>

@@ -13,10 +13,11 @@ status: accepted
 浏览器只向 daemon 同源请求 `/lite/api/*`。daemon 在自身 `checkAccess` 通过后，按 `/lite/api/` 前缀映射到 bridge loopback origin，并只代理以下路由：
 
 - `GET /api/snapshot`
-- `GET /api/pane/:id`（pane 当前终端屏幕；用于有限提取 pending prompt/preview）
+- `GET /api/pane/:id`（pane 当前终端屏幕；用于有限提取 pending prompt/preview，也作为只读文本镜像来源）
 - `GET /api/pane/:id/history`
 - `GET /api/launchers`
 - `POST /api/pane/:id/reply`
+- daemon 语义路由 `POST /lite/api/pane/:id/stop` 映射到 Collie 现有的 `POST /api/pane/:id/keys`，只发送 daemon 固定构造的 `{"keys":["ctrl+c"]}`；浏览器任意按键写入仍被拒绝。该操作只请求中断，不关闭 pane，也不保证进程已终止；后续 snapshot 才是权威状态。
 - `POST /api/launch`
 - `POST /api/pane/:id/keys`（仅 daemon 请求审批服务内部使用；携带上游 `expected_prompt` binding）
 

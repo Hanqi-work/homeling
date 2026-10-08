@@ -5,8 +5,8 @@ import { daemonConfigFromEnv } from "./config.ts";
 
 const permissionScreen = `Bash command\n\n  rm -rf build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend`;
 
-function request(path: string, options: { method?: string; body?: string; contentType?: string; origin?: string; remoteAddress?: string; login?: string } = {}) {
-  const headers = new Headers({ host: "localhost:8790" });
+function request(path: string, options: { method?: string; body?: string; contentType?: string; origin?: string; remoteAddress?: string; login?: string; host?: string } = {}) {
+  const headers = new Headers({ host: options.host ?? "localhost:8790" });
   if (options.login) headers.set("tailscale-user-login", options.login);
   if (options.contentType) headers.set("content-type", options.contentType);
   if (options.origin) headers.set("origin", options.origin);
@@ -18,7 +18,7 @@ function request(path: string, options: { method?: string; body?: string; conten
 }
 
 function cfg() {
-  return { ...daemonConfigFromEnv({}), bridgeOrigin: "http://127.0.0.1:8787" };
+  return { ...daemonConfigFromEnv({}), bridgeOrigin: "http://127.0.0.1:8787", tailscaleHost: "homeling.tail1234.ts.net", trustedUsers: ["me@github.com"] };
 }
 
 describe("pending request daemon routes", () => {
@@ -64,6 +64,28 @@ describe("pending request daemon routes", () => {
     }), config, fetcher);
     expect(wrongType.status).toBe(415);
     expect(writes).toBe(0);
+  });
+
+  test("stop requires trusted origin and only sends a fixed Ctrl-C", async () => {
+    const config = cfg();
+    const forwarded: Array<{ url: string; body: string | null }> = [];
+    const fetcher: BridgeFetch = async (input, init) => {
+      forwarded.push({ url: String(input), body: init?.body ? await new Response(init.body).text() : null });
+      return Response.json({ ok: true });
+    };
+    const path = "/lite/api/pane/w1:p1/stop";
+    const remote = { host: config.tailscaleHost, remoteAddress: "100.64.0.2", login: "me@github.com", contentType: "application/json", method: "POST" };
+    const noOrigin = await handleRequest(request(path, { ...remote, body: "{}" }), config, fetcher);
+    const badOrigin = await handleRequest(request(path, { ...remote, origin: "https://evil.example", body: "{}" }), config, fetcher);
+    expect(noOrigin.status).toBe(403);
+    expect(badOrigin.status).toBe(403);
+    expect(forwarded).toHaveLength(0);
+
+    const allowed = await handleRequest(request(path, {
+      ...remote, origin: `https://${config.tailscaleHost}`, body: '{"keys":["rm -rf /"]}',
+    }), config, fetcher);
+    expect(allowed.status).toBe(200);
+    expect(forwarded).toEqual([{ url: `${config.bridgeOrigin}/api/pane/w1:p1/keys`, body: '{"keys":["ctrl+c"]}' }]);
   });
 
   test("POST approval revalidates then forwards guarded keys and resolves the request", async () => {
