@@ -5,6 +5,7 @@
  */
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
+import { sendControlKey } from "./control-key.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
@@ -61,7 +62,7 @@ export async function handleRequest(
 
   const { pathname } = new URL(req.url);
   const isBridgeWritePost = req.method === "POST" && (
-    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop)$/.test(pathname)
+    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop|control-key)$/.test(pathname)
   );
   const isApprovalPost = req.method === "POST" && /^\/lite\/api\/requests\/[^/]+\/approve$/.test(pathname);
   if ((isBridgeWritePost || isApprovalPost) && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
@@ -76,6 +77,9 @@ export async function handleRequest(
   }
 
   const store = requestStore(cfg);
+  if (req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/control-key$/.test(pathname)) {
+    return sendControlKey(req, cfg, fetcher, store);
+  }
   if (pathname === API_REQUESTS_PATH && req.method === "GET") {
     try {
       return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login")));
