@@ -3,6 +3,7 @@
  * file (ADR-0001) and the same binary runs unchanged in tests and CI.
  */
 import { join } from "node:path";
+import { homedir } from "node:os";
 
 export interface DaemonConfig {
   /** Loopback listen port (default 8790, per PRD §3 / ADR-0004). */
@@ -24,6 +25,10 @@ export interface DaemonConfig {
    * the proxy hop never leaves this machine, and the bridge's own gate stays authoritative.
    */
   readonly bridgeOrigin: string;
+  /** Persistent daemon-owned persona registry. */
+  readonly registryPath: string;
+  /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
+  readonly herdrSocketPath: string;
 }
 
 const DEFAULT_PORT = 8790;
@@ -77,5 +82,7 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     tailscaleHost,
     allowAnyHost,
     bridgeOrigin,
+    registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
+    herdrSocketPath: env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock"),
   };
 }

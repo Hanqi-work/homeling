@@ -156,6 +156,20 @@ describe("historyReducer", () => {
     expect(state.outgoing[0]).toMatchObject({ status: "sent", matchedUuid: "right" });
   });
 
+  test("confirms persona messages using the exact text delivered with first-message instructions", () => {
+    let state = historyReducer(stateForPane("pane-a"), {
+      type: "outgoing-added", paneId: "pane-a", id: "persona-message", text: "hello", sentAt: Date.parse("2026-10-01T00:00:02Z"),
+    });
+    const delivered = "[Persona instructions]\nBe concise\n[End persona instructions]\n\nhello";
+    state = historyReducer(state, {
+      type: "received", paneId: "pane-a", requestId: 1,
+      entries: [entry("user-prefixed", "2026-10-01T00:00:03Z", delivered, "user")],
+    });
+    expect(state.outgoing[0]?.status).toBe("pending");
+    state = historyReducer(state, { type: "outgoing-confirmation-text", paneId: "pane-a", id: "persona-message", text: delivered });
+    expect(state.outgoing[0]).toMatchObject({ status: "sent", matchedUuid: "user-prefixed", text: "hello" });
+  });
+
   test("matches repeated identical sends to distinct history entries in FIFO order", () => {
     let state = historyReducer(stateForPane("pane-a"), {
       type: "outgoing-added", paneId: "pane-a", id: "optimistic-1", text: "same", sentAt: Date.parse("2026-10-01T00:00:01Z"),

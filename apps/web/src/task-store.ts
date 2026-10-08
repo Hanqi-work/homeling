@@ -5,6 +5,11 @@ type StoredTask = Omit<Task, "status">;
 
 const KEY_PREFIX = "homeling:tasks:";
 
+/** Persona task chips survive main-pane replacement; ordinary pane conversations stay pane-scoped. */
+export function conversationTaskStorageKey(conversationPaneId: string, personaId?: string): string {
+  return personaId ? `persona:${personaId}` : conversationPaneId;
+}
+
 function storageKey(conversationPaneId: string): string {
   return `${KEY_PREFIX}${encodeURIComponent(conversationPaneId)}`;
 }

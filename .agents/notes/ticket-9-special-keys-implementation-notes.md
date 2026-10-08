@@ -24,4 +24,6 @@
 - 真机遗留：手机经 Tailscale 点按 Ctrl+C/Escape，观察目标 TUI 行为；不在用户现有 pane 上自动执行取消键。Cmd/Enter 禁用是明确范围偏离，不宣称全部按键已验收。
 - 审查追加 P1：unknown 后仅 busy=false 会放开 composer，迟到取消键可能影响新文本。修复为 busy||unknown 持续前端隔离，daemon 同 pane reply 在控制 busy/unknown 时返回 409 + textDelivered:false，无上游写入（浏览器刷新亦不能绕过）。公共fixture暂停在上游 expected_prompt 校验通过、实际写键之前，验证快 reply 与迟到键后的 reply 均零写。不是声称 reply 先改变屏幕的顺序必定复现。
 - ReplyComposer 支持独立 disabledReason，控制键 unknown 时不得显示旧消息的“先重试”提示，草稿保留。控制键与未知封锁仅当前 daemon 进程内有效，重启不是未生效证明。
-- 合并 integration 1ea5775e 后曾 222 tests/typecheck/build 全绿；上述最后回归待复跑。
+- 合并 integration 1ea5775e 后曾 222 tests/typecheck/build 全绿；未知文本隔离修复后 224 tests/typecheck/build 绿。
+- integration 前进至 #10 b487ab05，再次 merge；保留 personaId taskStorageKey 与特殊键身份 imports 两边语义。发现新 persona/:id/message 不经过 reply proxy，补 sendPersonaMessage 锁内、实际 mainPaneId 提交点 controlKeyBlocksText。同一 HTTP 公共测试先红（200且写入）→绿（409+textDelivered:false，零 bridge reply）。这是跨票同一输入门接线，不扩展 persona 功能。
+- 本票 code-reviewer 终审 0 must-fix；主协调器另三只读复核确认原 unknown 隔离 P1 已撤销。

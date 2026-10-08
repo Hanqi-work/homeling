@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchLaunchers, fetchPaneScreen, launchTask, sendPaneReply, stopPaneTask, sendPaneControlKey } from "./api.ts";
+import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -45,6 +45,16 @@ describe("task launch API", () => {
     expect(result.pane.paneId).toBe("w2:p1");
   });
 
+  test("sends persona-owned tasks to the daemon with an explicit persona id", async () => {
+    let body = "";
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = String(init?.body);
+      return Response.json({ ok: true, pane: { paneId: "w1:p2", workspaceId: "w1", workspaceLabel: "Mira", tabId: "w1:t2", cwd: "/repo" } });
+    }) as unknown as typeof fetch;
+    await launchTask({ command: "bun test", label: "Test" }, undefined, "persona-1");
+    expect(body).toBe('{"command":"bun test","personaId":"persona-1"}');
+  });
+
   test("surfaces bridge allowlist failure rather than reporting a task", async () => {
     globalThis.fetch = (async () => Response.json(
       { ok: false, error: "Command is not allowlisted", code: "launch.not_allowlisted" },
@@ -54,6 +64,38 @@ describe("task launch API", () => {
       message: "Command is not allowlisted",
       code: "launch.not_allowlisted",
     });
+  });
+});
+
+describe("persona API", () => {
+  test("retains transcript confirmation text on partial persona message delivery", async () => {
+    const confirmationText = "[Persona instructions]\\nBe concise\\n[End persona instructions]\\n\\nhello";
+    globalThis.fetch = (async () => Response.json({
+      ok: false, error: "submit failed", textDelivered: true, personaConfirmationText: confirmationText,
+    }, { status: 502 })) as unknown as typeof fetch;
+    await expect(sendPersonaMessage("persona-1", "hello")).rejects.toMatchObject({ textDelivered: true, confirmationText });
+  });
+
+  test("loads, creates, and messages personas through the daemon API", async () => {
+    const requests: Array<{ url: string; method: string; body?: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), method: init?.method ?? "GET", body: init?.body?.toString() });
+      if (String(input).endsWith("/persona/list")) return Response.json({ personas: [] });
+      if (String(input).endsWith("/persona")) return Response.json({ persona: {
+        id: "persona-1", name: "Mira", avatar: { color: "#86efac" }, spaceId: "w1", mainPaneId: "w1:p1",
+        systemPrompt: "", createdAt: "2026-10-08T00:00:00Z", status: "active",
+      } }, { status: 201 });
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+
+    expect(await fetchPersonas()).toEqual({ personas: [] });
+    await expect(createPersona({ name: "Mira", avatar: { color: "#86efac" } })).resolves.toMatchObject({ id: "persona-1" });
+    await sendPersonaMessage("persona-1", "hello");
+    expect(requests).toEqual([
+      { url: "/lite/api/persona/list", method: "GET", body: undefined },
+      { url: "/lite/api/persona", method: "POST", body: '{"name":"Mira","avatar":{"color":"#86efac"}}' },
+      { url: "/lite/api/persona/persona-1/message", method: "POST", body: '{"text":"hello"}' },
+    ]);
   });
 });
 

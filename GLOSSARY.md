@@ -27,6 +27,9 @@ persona 的持久记忆，以 markdown 文件集合存在（facts / preferences 
 **space**
 Collie/herdr 的顶层分组。与 persona 一一对应。
 
+**archived space**
+已删除 persona 留下的 Herdr space。保留作为归档，不再属于活动 persona。
+
 **project**
 Collie/herdr 的 tab，在 persona 详情页呈现为"项目"分组（默认折叠）。与 tab 一一对应。
 

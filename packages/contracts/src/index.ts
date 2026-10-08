@@ -26,3 +26,13 @@ export { transcriptToMessages, mergeTranscripts } from "./transcript.ts";
 
 export type { CreateResponse, Launcher, LaunchersResponse, Task, TaskStatus } from "./tasks.ts";
 export { mapTaskStatuses } from "./tasks.ts";
+
+export type {
+  CreatePersonaRequest,
+  PersonaAvatar,
+  PersonaListResponse,
+  PersonaMessageRequest,
+  PersonaRecord,
+  PersonaStatus,
+  PersonaView,
+} from "./personas.ts";

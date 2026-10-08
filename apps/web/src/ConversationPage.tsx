@@ -3,10 +3,10 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { mapTaskStatuses, mergeTranscripts, paneControlIdentity, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type SnapshotResponse, type Task } from "@homeling/contracts";
+import { mapTaskStatuses, mergeTranscripts, paneControlIdentity, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type PersonaView, type SnapshotResponse, type Task } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
-import { Link, useParams } from "react-router";
-import { approvePendingRequest, fetchLaunchers, fetchPaneHistory, fetchPendingRequests, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply } from "./api.ts";
+import { Link, Navigate, useParams } from "react-router";
+import { approvePendingRequest, fetchLaunchers, fetchPaneHistory, fetchPendingRequests, fetchPersonas, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply, sendPersonaMessage } from "./api.ts";
 import { PendingRequestCard } from "./PendingRequestCard.tsx";
 import { RequestPollState } from "./request-poll-state.ts";
 import { toAssistantMessages } from "./assistant-messages.ts";
@@ -16,13 +16,14 @@ import { startAbortableSerialPolling } from "./polling.ts";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { TaskChip } from "./TaskChip.tsx";
-import { readConversationTasks, saveConversationTasks } from "./task-store.ts";
+import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
 type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 
 interface PaneConversationProps {
   paneId: string;
+  personaId?: string;
 }
 
 function failureLabel(message: OutgoingMessage): string {
@@ -31,7 +32,8 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactElement {
+  const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
   historyRef.current = history;
@@ -44,7 +46,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   const [snapshotHealthy, setSnapshotHealthy] = useState(false);
   const [controlBlocked, setControlBlocked] = useState(false);
   const controlBlockedRef = useRef(false);
-  const [tasks, setTasks] = useState<Task[]>(() => readConversationTasks(paneId));
+  const [tasks, setTasks] = useState<Task[]>(() => readConversationTasks(taskStorageKey));
   const [launchOpen, setLaunchOpen] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState("");
   const [launching, setLaunching] = useState(false);
@@ -160,8 +162,8 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   }, []);
 
   useEffect(() => {
-    saveConversationTasks(paneId, tasks);
-  }, [paneId, tasks]);
+    saveConversationTasks(taskStorageKey, tasks);
+  }, [taskStorageKey, tasks]);
 
   const controlPane = snapshotHealthy && snapshot?.bridge === "connected"
     ? [...snapshot.agents, ...snapshot.shellPanes].find((pane) => pane.paneId === paneId && ["idle", "working"].includes(pane.status))
@@ -179,7 +181,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
     setLaunching(true);
     setLaunchError(null);
     try {
-      const result = await launchTask(selected, paneId);
+      const result = await launchTask(selected, personaId ? undefined : paneId, personaId);
       setTasks((current) => [...current, {
         paneId: result.pane.paneId,
         launcher: selected,
@@ -293,10 +295,26 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
           : message);
         dispatch({ type: "outgoing-attempt-started", paneId, id: outgoing.id, attemptOrder });
         try {
-          await sendPaneReply(paneId, existing?.textDelivered ? "" : outgoing.text);
+          let confirmationText: string | undefined;
+          if (existing?.textDelivered) await sendPaneReply(paneId, "");
+          else if (personaId) confirmationText = await sendPersonaMessage(personaId, outgoing.text);
+          else await sendPaneReply(paneId, outgoing.text);
+          if (confirmationText) {
+            outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
+              ? { ...message, confirmationText }
+              : message);
+            dispatch({ type: "outgoing-confirmation-text", paneId, id: outgoing.id, text: confirmationText });
+          }
           if (existing?.textDelivered || existing?.deliveryUnknown) unblockResolved(outgoing.id);
         } catch (err: unknown) {
           const textDelivered = err instanceof ReplyRequestError ? err.textDelivered : null;
+          const confirmationText = err instanceof ReplyRequestError ? err.confirmationText : undefined;
+          if (confirmationText) {
+            outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
+              ? { ...message, confirmationText }
+              : message);
+            dispatch({ type: "outgoing-confirmation-text", paneId, id: outgoing.id, text: confirmationText });
+          }
           if (existing?.textDelivered || existing?.deliveryUnknown || textDelivered !== false) {
             blockUntilResolved(outgoing.id);
           }
@@ -416,7 +434,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
             {visibleTasks.length > 0 ? (
               <ul aria-label="任务" className="mt-2 flex flex-col gap-2">
-                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={`/p/${encodeURIComponent(paneId)}`} />)}
+                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={personaId ? `/persona/${encodeURIComponent(personaId)}` : `/p/${encodeURIComponent(paneId)}`} />)}
               </ul>
             ) : null}
           </ThreadPrimitive.Viewport>
@@ -452,8 +470,48 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
 }
 
 export function ConversationPage(): ReactElement {
-  const { paneId: routePaneId } = useParams();
-  const paneId = routePaneId ?? "";
-  if (!paneId) return <main className="p-6 text-sm">pane id missing</main>;
-  return <PaneConversation key={paneId} paneId={paneId} />;
+  const { paneId: routePaneId, personaId } = useParams();
+  const routePaneIdValue = routePaneId ?? "";
+  const [persona, setPersona] = useState<PersonaView | null>(null);
+  const [personaLookupError, setPersonaLookupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!personaId) {
+      setPersona(null);
+      setPersonaLookupError(null);
+      return;
+    }
+    const session = startAbortableSerialPolling(async (signal) => {
+      try {
+        const result = await fetchPersonas(signal);
+        if (signal.aborted) return;
+        const current = result.personas.find((item) => item.id === personaId);
+        setPersona(current ?? null);
+        setPersonaLookupError(current ? null : "Persona not found");
+      } catch (error: unknown) {
+        if (!signal.aborted) {
+          setPersonaLookupError(error instanceof Error ? error.message : "Unable to resolve persona");
+        }
+      }
+    }, 3000);
+    return () => session.stop();
+  }, [personaId]);
+
+  if (personaId) {
+    if (!persona || persona.id !== personaId) {
+      return <main className="p-6 text-sm text-neutral-400" role={personaLookupError ? "alert" : "status"}>
+        {personaLookupError ?? "Restoring persona conversation…"}
+      </main>;
+    }
+    if (routePaneIdValue) {
+      return <Navigate to={`/persona/${encodeURIComponent(personaId)}`} replace />;
+    }
+    return <>
+      {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} />
+    </>;
+  }
+
+  if (!routePaneIdValue) return <main className="p-6 text-sm">pane id missing</main>;
+  return <PaneConversation key={routePaneIdValue} paneId={routePaneIdValue} />;
 }

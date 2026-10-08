@@ -16,6 +16,8 @@ const CFG = {
   tailscaleHost: TAILSCALE_HOST,
   allowAnyHost: false,
   bridgeOrigin: "http://127.0.0.1:8787",
+  registryPath: "/tmp/homeling-test-registry.json",
+  herdrSocketPath: "/tmp/homeling-test-herdr.sock",
 };
 
 function req(opts: {
