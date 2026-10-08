@@ -8,7 +8,7 @@
 
 ## 架构
 
-Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，尚未交付的 push 不应当作当前 API。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
+Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，自持 push 与通知 tag 墓碑也是 daemon 自持数据；通知 debounce / coalesce 待 #16 收口。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
 
 ```text
 手机（tailnet） → Tailscale Serve HTTPS :443
@@ -118,7 +118,7 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 
 人工验收：锁屏后让 **daemon 注册的 persona 主 pane / 持久归属 task** 出现真实审批，正文须含具体操作；点击应进入正确 persona 主聊或 task；重复轮询、daemon 重启不重复同一 occurrence；明确解决后同内容新请求、新的 task occurrence / registry 主 pane replacement 可再通知。任务完成/失败只消费 #13 持久可信 Activity，unknown / 断连不猜结果。上游未提供可验证的同 pane 进程 incarnation：断连期间的同 pane 重启保持保守 unknown，不保证识别成新实例，不使用 session 名或 history UUID 猜测。
 
-发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；页面可向 `/lite/` SW 发送 `HOMELING_RETRACT` 按 tag 尝试本机关闭，不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
+发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；resolve/replace 同次持久 commit 保存通知 tag 墓碑；`/lite/` 前台所有路由只读轮询墓碑并实际向 exact 同 origin `/lite/` SW 发送 `HOMELING_RETRACT`，按 tag 尝试本机关闭（离线/旧 worker 仅 best effort），不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
 
 ## Persona 记忆（#12）
 

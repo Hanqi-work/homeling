@@ -27,7 +27,8 @@ export async function handlePushRequest(req: Request, runtime: PushApiRuntime, o
   if (!path.startsWith('/lite/api/push/')) return null;
   if (req.method === 'GET' && path === '/lite/api/push/status') {
     const state = await runtime.store.load();
-    return Response.json({ publicKey: runtime.publicKey, preferences: state.preferences, subscriptions: state.subscriptions.filter(s => s.owner === owner).map(s => ({ endpoint: s.endpoint })) }, { headers: noStore });
+    const retractTags = [...new Set([...Object.values(state.pendingOccurrences).filter(item => !item.active).map(item => `homeling-request-${item.occurrenceKey}`), ...state.retractTags])];
+    return Response.json({ publicKey: runtime.publicKey, preferences: state.preferences, retractTags, subscriptions: state.subscriptions.filter(s => s.owner === owner).map(s => ({ endpoint: s.endpoint })) }, { headers: noStore });
   }
   if (req.method !== 'POST' || !['subscribe', 'unsubscribe', 'preferences', 'test-send'].some(action => path === `/lite/api/push/${action}`)) return Response.json({ error: 'method or route not allowed' }, { status: 405, headers: noStore });
   try {

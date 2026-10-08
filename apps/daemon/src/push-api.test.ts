@@ -10,6 +10,18 @@ import { SessionController } from './session-controller.ts';
 import { handleRequest } from './index.ts';
 import { daemonConfigFromEnv } from './config.ts';
 
+test('readonly push status exposes actual resolved and superseded tags for local worker retraction', async () => {
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-retract-'));
+  try {
+    const store = new PushStore(join(dir, 'push.json'));
+    const lock = new SessionLock(); const { token } = lock.unlock('alice');
+    await store.mutate(state => ({ next: { ...state, pendingOccurrences: { old: { binding: 'main:old', identity: 'digest', occurrenceKey: 'old-uuid', active: false } }, retractTags: ['homeling-request-superseded'] }, result: undefined }), lock.admission(lock.admit(token, 'alice')));
+    const runtime = { store, publicKey: 'public', transport: { send: async () => ({ status: 'sent' as const }) } };
+    const response = await handlePushRequest(new Request('https://home.example/lite/api/push/status'), runtime, 'alice');
+    expect((await response!.json()).retractTags).toEqual(['homeling-request-old-uuid', 'homeling-request-superseded']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('push JSON budget cancels an oversized stream before buffering the remaining body or mutating state', async () => {
   const dir = await mkdtemp(join(await realpath(tmpdir()), 'homeling-push-budget-'));
   try {

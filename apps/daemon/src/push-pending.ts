@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PushBodyTemplate, PushPayload } from '@homeling/contracts';
-import type { PushPersistence } from './push-store.ts';
+import { withRetractTags, type PushPersistence } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 
 /** Binding is opaque to the ledger; the trusted source owns routing and identity. */
@@ -35,7 +35,7 @@ export class PendingPushLedger {
           events.push({ state: 'resolved', tag: `homeling-request-${item.occurrenceKey}` });
         }
       }
-      return { next: events.length ? { ...state, pendingOccurrences } : state, result: events };
+      return { next: events.length ? withRetractTags({ ...state, pendingOccurrences }, events.map(event => event.tag)) : state, result: events };
     }, this.admission);
   }
   async observe(observation: PendingPushObservation): Promise<PendingPushEvent | null> {
@@ -45,10 +45,10 @@ export class PendingPushLedger {
       const current = state.pendingOccurrences[key];
       if (observation.state === 'resolved') {
         if (!current?.active) return { next: state, result: null };
-        const next = {
+        const next = withRetractTags({
           ...state,
           pendingOccurrences: { ...state.pendingOccurrences, [key]: { ...current, active: false } },
-        };
+        }, [`homeling-request-${current.occurrenceKey}`]);
         const result: PendingPushEvent = { state: 'resolved', tag: `homeling-request-${current.occurrenceKey}` };
         return { next, result };
       }
@@ -66,13 +66,13 @@ export class PendingPushLedger {
         url: observation.url,
         occurrenceKey: `request:${occurrenceKey}`,
       };
-      const next = sameOccurrence ? state : {
+      const next = sameOccurrence ? state : withRetractTags({
         ...state,
         pendingOccurrences: {
           ...state.pendingOccurrences,
           [key]: { binding: observation.binding, identity, occurrenceKey, active: true },
         },
-      };
+      }, current ? [`homeling-request-${current.occurrenceKey}`] : []);
       const supersededTag = current?.active && !sameOccurrence
         ? `homeling-request-${current.occurrenceKey}` : undefined;
       const result: PendingPushEvent = {

@@ -17,3 +17,4 @@ unlock-verifier.json
 # Defensive only: independent push keys/subscriptions also belong outside repositories.
 vapid.json
 push.json
+push.json.*.tmp

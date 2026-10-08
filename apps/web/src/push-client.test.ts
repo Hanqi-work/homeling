@@ -2,7 +2,18 @@ import { afterEach, beforeEach, test, expect } from 'bun:test';
 import { sessionState } from './session-state.ts';
 beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: 'push-fixture' }); sessionState.caughtUp(); });
 afterEach(() => sessionState.lock());
-import { enablePush } from './push-client.ts';
+import { enablePush, pushApi } from './push-client.ts';
+
+test('push business requests attach the captured epoch and boot-generation contract without storing secrets', async () => {
+  const original = globalThis.fetch; let headers = new Headers();
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => { headers = new Headers(init?.headers); return Response.json({ ok: true }); }) as typeof fetch;
+    await pushApi('preferences', { enabled: false });
+    expect(headers.get('x-homeling-session-epoch')).toBe('1');
+    expect(headers.get('x-homeling-session-generation')).toBe('push-fixture');
+    expect(headers.get('content-type')).toBe('application/json');
+  } finally { globalThis.fetch = original; }
+});
 
 test('lock and re-unlock during browser lookup cannot rebind an old enrollment to the new epoch', async () => {
   const held = Promise.withResolvers<PushSubscription | null>(); let subscribed = 0; let enrolled = 0;
