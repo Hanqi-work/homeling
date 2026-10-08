@@ -38,14 +38,14 @@ export class ControlKeyInteraction {
   }
 }
 
-export function SpecialKeyBar({ paneId, identity, disabled, onBusyChange }: { paneId: string; identity: string | null; disabled: boolean; onBusyChange?: (busy: boolean) => void }): ReactElement {
+export function SpecialKeyBar({ paneId, identity, disabled, onBlockedChange }: { paneId: string; identity: string | null; disabled: boolean; onBlockedChange?: (busy: boolean) => void }): ReactElement {
   const [view, setView] = useState<KeyView>(INITIAL);
   const interaction = useRef<ControlKeyInteraction | null>(null);
-  const busyCallback = useRef(onBusyChange);
-  busyCallback.current = onBusyChange;
+  const busyCallback = useRef(onBlockedChange);
+  busyCallback.current = onBlockedChange;
   if (!interaction.current) interaction.current = new ControlKeyInteraction((next) => {
     setView(next);
-    busyCallback.current?.(next.busy);
+    busyCallback.current?.(next.busy || next.unknown);
   });
   const model = interaction.current;
   // A changed target invalidates confirmation, never an in-flight or uncertain write.

@@ -6,6 +6,12 @@ import { detectPendingRequest, type PendingRequestStore } from "./requests.ts";
 // Only cancellation gestures: never expose Enter, selection, or arbitrary modifier combinations.
 const ACTIONS = { interrupt: "ctrl+c", escape: "Escape" } as const;
 const states = new WeakMap<DaemonConfig, Map<string, { busy: boolean; unknown: boolean; until: number }>>();
+/** Prevent text from racing a late cancellation, even after a browser reload. */
+export function controlKeyBlocksText(cfg: DaemonConfig, paneId: string): boolean {
+  const state = states.get(cfg)?.get(paneId);
+  return !!state && (state.busy || state.unknown);
+}
+
 function rejected(error: string, status = 409): Response {
   return Response.json({ outcome: "not-submitted", error }, { status });
 }

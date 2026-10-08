@@ -42,8 +42,8 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   const [launchers, setLaunchers] = useState<readonly Launcher[]>([]);
   const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
   const [snapshotHealthy, setSnapshotHealthy] = useState(false);
-  const [controlBusy, setControlBusy] = useState(false);
-  const controlBusyRef = useRef(false);
+  const [controlBlocked, setControlBlocked] = useState(false);
+  const controlBlockedRef = useRef(false);
   const [tasks, setTasks] = useState<Task[]>(() => readConversationTasks(paneId));
   const [launchOpen, setLaunchOpen] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState("");
@@ -254,7 +254,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   }
 
   function sendMessage(text: string, existing?: OutgoingMessage): void {
-    if (controlBusyRef.current || (sendBlockedRef.current && !existing)) return;
+    if (controlBlockedRef.current || (sendBlockedRef.current && !existing)) return;
     if (existing && queuedMessageIds.current.has(existing.id)) return;
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
@@ -307,7 +307,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
   }
 
   function submitDraft(): void {
-    if (controlBusyRef.current || sendBlockedRef.current || !draft.trim()) return;
+    if (controlBlockedRef.current || sendBlockedRef.current || !draft.trim()) return;
     const text = draft;
     setDraft("");
     sendMessage(text);
@@ -442,9 +442,9 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
             paneId={paneId}
             identity={controlIdentity}
             disabled={sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
-            onBusyChange={(busy) => { controlBusyRef.current = busy; setControlBusy(busy); }}
+            onBlockedChange={(busy) => { controlBlockedRef.current = busy; setControlBlocked(busy); }}
           />
-          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBusy} />
+          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

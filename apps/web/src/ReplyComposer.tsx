@@ -7,6 +7,7 @@ interface ReplyComposerProps {
   onDraftChange: (value: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  disabledReason?: string;
 }
 
 export function submitComposerDraft(draft: string, onSend: () => void): void {
@@ -27,7 +28,7 @@ export function handleComposerKeyDown(
   submit();
 }
 
-export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false }: ReplyComposerProps): ReactElement {
+export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, disabledReason }: ReplyComposerProps): ReactElement {
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     if (!disabled) submitComposerDraft(draft, onSend);
@@ -73,7 +74,7 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false }
           Send
         </button>
       </div>
-      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">请先重试尚未确认的消息，再发送新消息。</p> : null}
+      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">{disabledReason ?? "请先重试尚未确认的消息，再发送新消息。"}</p> : null}
       <p className="mt-1 text-right text-[10px] text-neutral-500">Enter 发送 · Shift+Enter 换行</p>
     </form>
   );

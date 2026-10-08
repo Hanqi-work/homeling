@@ -136,6 +136,41 @@ test("concurrent requests cannot enqueue a second key while validation is still 
   expect(writes).toHaveLength(1);
 });
 
+test("a delayed cancellation and unknown result isolate same-pane text, including after a browser refresh", async () => {
+  const cfg = config();
+  const { fetcher, writes } = bridge();
+  let finish!: () => void;
+  let started!: () => void;
+  const written = new Promise<void>((resolve) => { started = resolve; });
+  const held = new Promise<void>((resolve) => { finish = resolve; });
+  let appliedKeys = 0;
+  const delayed: BridgeFetch = async (input, init) => {
+    if (init?.method === "POST") {
+      // Pause after a successful upstream binding check, before the actual key write.
+      expect(JSON.parse(String(init.body))).toEqual({ keys: ["ctrl+c"], expected_prompt: screen });
+      started();
+      await held;
+      appliedKeys++;
+      throw new Error("late key result lost");
+    }
+    return fetcher(input, init);
+  };
+  const key = handleRequest(request(), cfg, delayed);
+  await written;
+  let replies = 0;
+  const textFetcher: BridgeFetch = async () => { replies++; return Response.json({ ok: true }); };
+  const reply = () => handleRequest(request({ text: "new instruction", submit: true }, "/lite/api/pane/w1:p1/reply"), cfg, textFetcher);
+  expect((await reply()).status).toBe(409);
+  expect(replies).toBe(0);
+  expect(writes).toHaveLength(0);
+  finish();
+  expect(await (await key).json()).toMatchObject({ outcome: "unknown" });
+  expect(appliedKeys).toBe(1);
+  expect(await (await reply()).json()).toMatchObject({ ok: false, textDelivered: false });
+  expect(replies).toBe(0);
+  expect(writes).toHaveLength(0);
+});
+
 test("malformed write response is unknown and validation follows snapshot-screen-snapshot-write", async () => {
   const cfg = config();
   const routes: Array<{ path: string; method: string; login: string | null }> = [];
