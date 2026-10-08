@@ -1,8 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchLaunchers, fetchPaneScreen, launchTask, sendPaneReply, stopPaneTask } from "./api.ts";
+import { fetchLaunchers, fetchPaneScreen, launchTask, sendPaneReply, stopPaneTask, transcribeAudio } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+describe("STT API", () => {
+  test("uploads raw recorder bytes with cancellation and returns text without a reply call", async () => {
+    const audio = new Blob(["clip"], { type: "audio/mp4" });
+    const controller = new AbortController();
+    const urls: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      expect(init?.body).toBe(audio);
+      expect(new Headers(init?.headers).get("content-type")).toBe("audio/mp4");
+      expect(init?.signal).toBeDefined();
+      controller.abort();
+      expect(init?.signal?.aborted).toBe(true);
+      return Response.json({ ok: true, text: "请继续" });
+    }) as typeof fetch;
+    await expect(transcribeAudio(audio, controller.signal)).resolves.toBe("请继续");
+    expect(urls).toEqual(["/lite/api/stt"]);
+  });
+});
 
 describe("task launch API", () => {
   test("reads launcher rows and posts only the selected allowlist command", async () => {

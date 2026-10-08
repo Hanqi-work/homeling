@@ -425,7 +425,7 @@ function PaneConversation({ paneId }: PaneConversationProps): ReactElement {
               ))}
             </section>
           ) : null}
-          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

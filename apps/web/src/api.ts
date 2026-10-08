@@ -2,6 +2,30 @@ import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, 
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
+/** Raw audio in, editable text out. This endpoint is deliberately pane-agnostic. */
+export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(`${API_PREFIX}stt`, {
+    method: "POST", body: audio,
+    headers: { accept: "application/json", "content-type": audio.type || "audio/webm" },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
+  });
+  let result: { ok?: boolean; text?: unknown; code?: string } = {};
+  try { result = await response.json() as typeof result; } catch {
+    throw new Error(`转写失败（${response.status}），请重试。`);
+  }
+  if (!response.ok || result.ok !== true || typeof result.text !== "string") {
+    const message = result.code === "stt.unconfigured" || response.status === 503
+      ? "语音转写未配置或不可用，请在电脑上检查 Collie STT 设置。"
+      : response.status === 429 ? "转写服务忙，请稍后重试。"
+      : response.status === 413 ? "录音过大，请缩短后重试。"
+      : response.status === 415 ? "录音格式不受支持，请换浏览器重试。"
+      : response.status === 504 ? "转写超时，请重试。"
+      : `转写失败（${response.status}），请重试。`;
+    throw new Error(message);
+  }
+  return result.text;
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_PREFIX}${path}`, {
     signal,
