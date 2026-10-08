@@ -156,7 +156,7 @@ export async function handleRequest(
     return Response.json({ ok: true, service: "homeling-daemon" });
   }
 
-  const runtime = runtimeOverride ?? personaRuntime(cfg, fetcher);
+  const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
   if (pathname === `${API_PERSONA_PATH}/list` && req.method === "GET") {
     try {
       return Response.json({ personas: await listPersonas(runtime) });
