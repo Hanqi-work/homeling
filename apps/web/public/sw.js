@@ -11,7 +11,7 @@
  * - app shell (/lite/index.html, /lite/assets/*): cache-first.
  * - navigations (deep links / refresh): network-first, cached shell as offline fallback.
  */
-const SW_VERSION = "v1";
+const SW_VERSION = "v2-push";
 const CACHE_PREFIX = "homeling-lite";
 const SHELL_CACHE = `${CACHE_PREFIX}-shell-${SW_VERSION}`;
 const NAV_CACHE = `${CACHE_PREFIX}-nav-${SW_VERSION}`;
@@ -86,4 +86,53 @@ self.addEventListener("fetch", (event) => {
 // in register-sw.ts picks up the activated worker either way.
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+  if (event.data?.type === "HOMELING_RETRACT" && typeof event.data.tag === "string" && event.source?.url) {
+    const source = new URL(event.source.url);
+    if (source.origin === self.location.origin && source.pathname.startsWith("/lite/")) {
+      event.waitUntil(self.registration.getNotifications({ tag: event.data.tag }).then((items) => items.forEach((item) => item.close())));
+    }
+  }
+});
+
+function liteNotificationUrl(value) {
+  try {
+    const url = new URL(value, self.location.origin);
+    if (url.origin === self.location.origin && !url.username && !url.password && url.pathname.startsWith("/lite/") && !url.pathname.startsWith("/lite/api/")) return url.href;
+  } catch {}
+  return `${self.location.origin}/lite/`;
+}
+
+self.addEventListener("push", (event) => {
+  event.waitUntil((async () => {
+    let payload;
+    try { payload = event.data?.json(); } catch { return; }
+    if (payload?.version !== 1 || payload.type !== "notification" || typeof payload.title !== "string" || typeof payload.body !== "string" || typeof payload.tag !== "string") return;
+    await self.registration.showNotification(payload.title.slice(0, 120), {
+      body: payload.body.slice(0, 500), tag: payload.tag.slice(0, 200),
+      icon: "/lite/icons/icon-192.png", badge: "/lite/icons/icon-192.png",
+      data: { url: liteNotificationUrl(payload.url) },
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const target = liteNotificationUrl(event.notification.data?.url);
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    // Never navigate or focus Collie's root-path UI.
+    const existing = windows.find((client) => {
+      const url = new URL(client.url);
+      return url.origin === self.location.origin && url.pathname.startsWith("/lite/");
+    });
+    if (existing) {
+      try {
+        const navigated = await existing.navigate(target);
+        if (navigated) { await navigated.focus(); return; }
+      } catch {
+        // The tab may have disappeared while the click was being handled; open a fresh lite tab.
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
 });

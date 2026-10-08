@@ -2,9 +2,11 @@ import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { AppRoot } from "./AppRoot.tsx";
+import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { LocaleProvider, useLocale } from "./locale.tsx";
+import { PushSettings } from "./PushSettings.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
@@ -25,9 +27,11 @@ createRoot(root).render(
     <LocaleProvider>
       <BrowserRouter basename="/lite">
         <AppRoot slots={{
+          homeSummary: <SessionAwareHomeTriage />,
           memory: (personaId) => <PersonaMemoryEditor personaId={personaId} />,
           customize: (personaId) => <PersonaCustomize personaId={personaId} />,
           activity: (personaId) => <Suspense fallback={<ActivityLoading />}><ActivityPanel personaId={personaId} /></Suspense>,
+          settings: <PushSettings />,
         }} />
       </BrowserRouter>
     </LocaleProvider>

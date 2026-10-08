@@ -15,6 +15,7 @@ import { ActivityTimeline } from "./ActivityPanel.tsx";
 import { RecordedTaskDetail } from "./ActivityTaskBoundary.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { sessionState } from "./session-state.ts";
+import { HomeTriage } from "./HomeTriage.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -39,10 +40,24 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("triage count grammar changes locale without refetching, changing scoped links or translating the agent question", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const persona = { id: "m", name: "Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", status: "blocked" };
+  const request = { id: "r", paneId: "p", personaId: "m", kind: "prompt-select", payload: { question: "Original agent question 原文", options: [] }, createdAt: "2026-10-08", status: "pending" };
+  let reads = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => { reads++; return String(input).endsWith("/persona/list") ? Response.json({ personas: [persona] }) : Response.json([request, { ...request, id: "r2" }]); }) as typeof fetch;
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><MemoryRouter><HomeTriage pollIntervalMs={60000} /></MemoryRouter></LocaleProvider>));
+  const select = container.querySelector<HTMLSelectElement>("#homeling-language")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector("h2")?.textContent).toBe("1 Begleiter braucht dich");
+  expect(container.textContent).toContain("Original agent question 原文");
+  expect(container.querySelector('a[href="/persona/m"]')).not.toBeNull();
+  expect(reads).toBe(2);
+});
 test("fallback deletion failure is translated at render time, not frozen in the old locale", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   sessionState.apply({ locked: false, epoch: 1, generation: "locale-delete" }); sessionState.caughtUp();
-  globalThis.fetch = (async () => { throw "non-error failure"; }) as typeof fetch;
+  globalThis.fetch = (async () => { throw "non-error failure"; }) as unknown as typeof fetch;
   const persona = { id: "m", name: "Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", systemPrompt: "", createdAt: "2026-10-08", status: "idle" as const };
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><MemoryRouter><PersonaDetailContent persona={persona} /></MemoryRouter></LocaleProvider>));
   for (const label of ["Delete Mira", "Confirm deletion"]) await act(async () => [...container.querySelectorAll("button")].find((item) => item.textContent === label)!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));

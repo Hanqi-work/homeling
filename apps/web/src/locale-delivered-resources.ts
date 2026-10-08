@@ -1,5 +1,11 @@
 // Columns: en, de, es, ko, ja, zh. Original task titles, details and terminal text are parameters, never translations.
 export const deliveredMessages = {
+  "triage.needsYouOne": ["{count} companion needs you", "{count} Begleiter braucht dich", "{count} compañero te necesita", "동료 {count}명이 나를 기다립니다", "{count}人の仲間があなたを待っています", "{count} 个伙伴需要你"],
+  "triage.needsYou": ["{count} companions need you", "{count} Begleiter brauchen dich", "{count} compañeros te necesitan", "동료 {count}명이 나를 기다립니다", "{count}人の仲間があなたを待っています", "{count} 个伙伴需要你"],
+  "triage.label": ["Pending requests", "Ausstehende Anfragen", "Solicitudes pendientes", "대기 중인 요청", "未処理のリクエスト", "待处理请求"],
+  "triage.updateFailed": ["Pending request update failed. Try again later.", "Aktualisierung ausstehender Anfragen fehlgeschlagen. Versuche es später erneut.", "Error al actualizar solicitudes pendientes. Inténtalo más tarde.", "대기 요청 업데이트에 실패했습니다. 잠시 후 재시도하세요.", "未処理リクエストの更新に失敗しました。後でもう一度お試しください。", "待处理请求更新失败，请稍后重试。"],
+  "triage.lastConfirmed": ["These are the last confirmed requests.", "Dies sind die zuletzt bestätigten Anfragen.", "Estas son las últimas solicitudes confirmadas.", "마지막으로 확인된 요청입니다.", "最後に確認されたリクエストです。", "以下为上次确认的请求。"],
+  "triage.ownershipUnknown": ["Task ownership cannot be confirmed yet. Try again later.", "Aufgabenzuordnung noch nicht bestätigt. Versuche es später erneut.", "La pertenencia de la tarea aún no se puede confirmar. Inténtalo más tarde.", "아직 작업 소유자를 확인할 수 없습니다. 잠시 후 재시도하세요.", "まだタスクの所属を確認できません。後でもう一度お試しください。", "暂不可确认任务归属，请稍后重试。"],
   "common.retry": ["Retry", "Erneut versuchen", "Reintentar", "재시도", "再試行", "重试"],
   "common.sending": ["Sending…", "Wird gesendet…", "Enviando…", "전송 중…", "送信中…", "发送中…"],
   "common.connectionLost": ["Connection lost", "Verbindung verloren", "Conexión perdida", "연결 끊김", "接続が切れました", "连接已断开"],
