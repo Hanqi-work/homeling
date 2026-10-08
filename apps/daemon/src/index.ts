@@ -6,9 +6,21 @@
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
+import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
 
 export const API_HEALTH_PATH = "/lite/api/health";
+export const API_REQUESTS_PATH = "/lite/api/requests";
+
+const requestStores = new WeakMap<DaemonConfig, PendingRequestStore>();
+function requestStore(cfg: DaemonConfig): PendingRequestStore {
+  let store = requestStores.get(cfg);
+  if (!store) {
+    store = new PendingRequestStore();
+    requestStores.set(cfg, store);
+  }
+  return store;
+}
 
 export function accessConfigOf(c: DaemonConfig): AccessConfig {
   return {
@@ -48,10 +60,11 @@ export async function handleRequest(
   }
 
   const { pathname } = new URL(req.url);
-  const isWritePost = req.method === "POST" && (
-    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/reply$/.test(pathname)
+  const isBridgeWritePost = req.method === "POST" && (
+    pathname === `${BROWSER_API_PREFIX}launch` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys)$/.test(pathname)
   );
-  if (isWritePost && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
+  const isApprovalPost = req.method === "POST" && /^\/lite\/api\/requests\/[^/]+\/approve$/.test(pathname);
+  if ((isBridgeWritePost || isApprovalPost) && !isLoopbackRequest(req) && !hasTailscaleOrigin(req, cfg)) {
     return new Response("cross-origin rejected\n", {
       status: 403,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -62,8 +75,46 @@ export async function handleRequest(
     return Response.json({ ok: true, service: "homeling-daemon" });
   }
 
+  const store = requestStore(cfg);
+  if (pathname === API_REQUESTS_PATH && req.method === "GET") {
+    try {
+      return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login")));
+    } catch {
+      return Response.json({ error: "bridge unavailable" }, { status: 502 });
+    }
+  }
+  const approvalMatch = pathname.match(/^\/lite\/api\/requests\/([^/]+)\/approve$/);
+  if (approvalMatch && req.method === "POST") {
+    const mediaType = req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (mediaType !== "application/json") {
+      return new Response("application/json required\n", {
+        status: 415,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+    let body: { optionId?: unknown };
+    try {
+      body = await req.json() as { optionId?: unknown };
+    } catch {
+      return Response.json({ error: "bad body" }, { status: 400 });
+    }
+    if (typeof body.optionId !== "string" || body.optionId.length === 0) {
+      return Response.json({ error: "optionId required" }, { status: 400 });
+    }
+    let id: string;
+    try {
+      id = decodeURIComponent(approvalMatch[1]!);
+    } catch {
+      return Response.json({ error: "invalid request id" }, { status: 400 });
+    }
+    const outcome = await approvePendingRequest(
+      cfg, fetcher, store, id, body.optionId, Date.now(), req.headers.get("tailscale-user-login"),
+    );
+    return Response.json(outcome, { status: outcome.status === "expired" ? 409 : 200 });
+  }
+
   if (pathname.startsWith(BROWSER_API_PREFIX)) {
-    if (req.method === "POST" && !isWritePost) {
+    if (req.method === "POST" && !isBridgeWritePost) {
       return new Response("method not allowed\n", { status: 405, headers: { allow: "GET" } });
     }
     if (req.method !== "GET" && req.method !== "POST") {

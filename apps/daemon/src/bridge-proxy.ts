@@ -1,6 +1,6 @@
 /**
- * The /api/* wiring decision (ADR-0005) as code: the daemon re-proxies a narrow allowlist of
- * bridge endpoints, including user reply and launcher writes, so the browser only talks to its own origin.
+ * The /api/* wiring decision (ADR-0005) as code: the daemon re-proxies narrow bridge reads/writes;
+ * browser approval is mediated by request IDs rather than raw keys.
  *
  * The browser asks `/lite/api/...` (base-relative from the SPA) → tailscale forwards the full
  * path to the daemon → the daemon checks its own access gate → fetches the allowlisted bridge
@@ -15,25 +15,28 @@ export const BROWSER_API_PREFIX = "/lite/api/";
 export type BridgeFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
- * The narrow allowlist admits snapshot/history/launchers reads and POST to pane reply or launch.
- * Every other write/action is refused here rather than forwarded. Exact route matching prevents a
- * longer, wronger path from inheriting an allowlisted prefix's verdict.
+ * The narrow allowlist admits snapshot/pane/history/launcher reads, POST to pane reply or launch,
+ * and internal POST keys. Direct browser key writes are blocked in `proxyBridgeRequest` below.
  */
 const SAFE_PANE_ID = /^[A-Za-z0-9._~:-]{1,128}$/;
+const RESERVED_PANE_SEGMENTS = new Set(["history", "reply", "keys"]);
 const LAUNCH_TIMEOUT_MS = 60_000;
 
 export function allowBridgePath(bridgePath: string, method = "GET"): boolean {
   if (method === "GET" && ["/api/snapshot", "/api/launchers"].includes(bridgePath)) return true;
   if (bridgePath === "/api/launch") return method === "POST";
-  const action = bridgePath.match(/^\/api\/pane\/([^/]+)\/(history|reply)$/);
-  if (!action || (action[2] === "history" ? method !== "GET" : method !== "POST")) return false;
+  const action = bridgePath.match(/^\/api\/pane\/([^/]+)(?:\/(history|reply|keys))?$/);
+  if (!action) return false;
+  const suffix = action[2];
   const paneId = action[1]!;
-  return paneId !== "." && paneId !== ".." && !paneId.includes("..") && SAFE_PANE_ID.test(paneId);
+  const methodAllowed = suffix === undefined || suffix === "history" ? method === "GET" : method === "POST";
+  return methodAllowed && paneId !== "." && paneId !== ".." && !paneId.includes("..") &&
+    !RESERVED_PANE_SEGMENTS.has(paneId) && SAFE_PANE_ID.test(paneId);
 }
 
 /**
- * Parse first, then validate the normalized final target. Only the snapshot route, pane history,
- * and pane reply survive URL dot-segment normalization. The pane id is decoded once and rejected
+ * Parse first, then validate the normalized final target. Only the snapshot route, pane screen/history,
+ * reply and internal keys targets survive URL dot-segment normalization. The pane id is decoded once and rejected
  * if decoding exposes a delimiter or another encoded layer.
  */
 export function proxyTargetUrl(pathWithQuery: string, cfg: DaemonConfig, method = "GET"): string {
@@ -72,7 +75,7 @@ export function proxyTargetUrl(pathWithQuery: string, cfg: DaemonConfig, method 
   if (["/lite/api/snapshot", "/lite/api/launchers", "/lite/api/launch"].includes(incoming.pathname)) {
     bridgePath = incoming.pathname.slice("/lite".length);
   } else {
-    const pane = incoming.pathname.match(/^\/lite\/api\/pane\/([^/]+)\/(history|reply)$/);
+    const pane = incoming.pathname.match(/^\/lite\/api\/pane\/([^/]+)(?:\/(history|reply|keys))?$/);
     if (!pane) throw new Error(`not a proxyable path: ${pathWithQuery}`);
     let paneId: string;
     try {
@@ -83,7 +86,7 @@ export function proxyTargetUrl(pathWithQuery: string, cfg: DaemonConfig, method 
     if (/[\\/#?%]/.test(paneId) || paneId.includes("..") || !SAFE_PANE_ID.test(paneId)) {
       throw new Error(`not a proxyable path: ${pathWithQuery}`);
     }
-    bridgePath = `/api/pane/${paneId}/${pane[2]}`;
+    bridgePath = `/api/pane/${paneId}${pane[2] ? `/${pane[2]}` : ""}`;
   }
 
   if (!allowBridgePath(bridgePath, method)) throw new Error(`not a proxyable path: ${pathWithQuery}`);
@@ -104,6 +107,12 @@ export async function proxyBridgeRequest(
   try {
     target = proxyTargetUrl(url.pathname + url.search, cfg, req.method);
   } catch {
+    return new Response("not found\n", { status: 404 });
+  }
+
+  // The key writer is intentionally not a browser proxy route. Requests reach it only through the
+  // daemon's request-id approval handler, which owns the option mapping and race binding.
+  if (req.method === "POST" && /\/api\/pane\/[^/]+\/keys$/.test(new URL(target).pathname)) {
     return new Response("not found\n", { status: 404 });
   }
 

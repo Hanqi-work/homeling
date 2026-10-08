@@ -12,6 +12,9 @@
     "apps/daemon": {
       "name": "@homeling/daemon",
       "version": "0.0.0",
+      "dependencies": {
+        "@homeling/contracts": "workspace:*",
+      },
     },
     "apps/web": {
       "name": "@homeling/web",
