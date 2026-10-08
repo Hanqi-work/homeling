@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "key-fixture" }); sessionState.caughtUp(); });
+afterEach(() => sessionState.lock());
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
 import { act, useState } from "react";

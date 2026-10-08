@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { PushPayload } from '../../../packages/contracts/src/push.ts';
+import type { PushPayload } from '@homeling/contracts';
 import type { PushPersistence, StoredPushSubscription } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 import { SessionLocked, type MutationAdmission } from './session-lock.ts';
@@ -62,5 +62,5 @@ export async function sendPushTest(store: PushPersistence, transport: PushTransp
   admission.assert();
   const subscription = (await store.load()).subscriptions.find(s => s.endpoint === endpoint && s.owner === owner);
   if (!subscription) throw new Error('subscription not found');
-  return admission.dispatch(() => transport.send(subscription, { version: 1, type: 'notification', title: 'Homeling', body: '通知已连接。真实审批会在这里显示具体问题。', tag: 'homeling-test', url: '/lite/settings', occurrenceKey: 'test' }));
+  return admission.dispatch(() => transport.send(subscription, { version: 1, type: 'notification', title: 'Homeling', body: '通知已连接。真实审批会在这里显示具体问题。', bodyTemplate: { key: 'push.test', params: {} }, tag: 'homeling-test', url: '/lite/settings', occurrenceKey: 'test' }));
 }

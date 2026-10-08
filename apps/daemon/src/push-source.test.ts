@@ -66,6 +66,33 @@ test('missing panes and failed, truncated, or unrecognized screens cannot settle
   expect(batch.observations).toEqual([{ state: 'unknown', binding: 'task:unknown' }, { state: 'resolved', binding: 'task:resolved' }]);
 });
 
+test('preview pointer repaint changes the specific summary but never creates a new notification identity', async () => {
+  const preview = `Use the AskUserQuestion tool to ask one question
+──────────────
+ ☐ Design
+
+Which widget design should we use?
+❯ 1. Boxy                         ┌──────────────────────┐
+  2. Rounded                      │ rounded mockup       │
+  3. Minimal                      └──────────────────────┘
+                                  │ more preview         │
+                                  Notes: press n to add notes
+──────────────
+  Chat about this
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel`;
+  let currentScreen = preview;
+  const fetcher = async (input: RequestInfo | URL) => String(input).endsWith('/snapshot')
+    ? Response.json({ bridge: 'connected', agents: [{ paneId: 'main', workspaceId: 'w1', status: 'blocked' }] })
+    : Response.json({ text: currentScreen, truncated: false });
+  const first = (await readPendingPushBatch(daemonConfigFromEnv({}), fetcher, makeRegistry(), async () => [])).observations[0];
+  currentScreen = preview.replace('❯ 1. Boxy', '  1. Boxy').replace('  2. Rounded', '❯ 2. Rounded').replace('rounded mockup', 'updated mockup');
+  const repainted = (await readPendingPushBatch(daemonConfigFromEnv({}), fetcher, makeRegistry(), async () => [])).observations[0];
+  expect(first?.state).toBe('pending'); expect(repainted?.state).toBe('pending');
+  if (first?.state !== 'pending' || repainted?.state !== 'pending') throw new Error('fixture did not produce a preview');
+  expect(repainted.summary).not.toBe(first.summary);
+  expect(repainted.identity).toBe(first.identity);
+});
+
 test('snapshot failure cannot produce a retirement batch or read ownership', async () => {
   for (const response of [new Response(null, { status: 503 }), Response.json({ bridge: 'disconnected' })]) {
     let reads = 0;

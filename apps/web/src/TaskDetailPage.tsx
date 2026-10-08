@@ -12,6 +12,9 @@ import { ActivityTaskBoundary } from "./ActivityTaskBoundary.tsx";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { enqueueTaskSend, createTaskSendQueue, stopControlState, taskAvailability, taskRuntimeMinutes } from "./task-detail.ts";
 
+import { useSessionSnapshot } from "./SessionBoundary.tsx";
+import { sessionState } from "./session-state.ts";
+
 interface RouteState {
   task?: Task;
   returnTo?: string;
@@ -30,7 +33,11 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
   historyRef.current = history;
-  const sendQueue = useRef(createTaskSendQueue());
+  const lockSession = useSessionSnapshot();
+  const sendQueue = useRef(createTaskSendQueue(sessionState.admit, (id) => {
+    dispatch({ type: "outgoing-failed", paneId, id, textDelivered: false });
+    queuedIds.current.delete(id);
+  }));
   const sendAttempt = useRef(0);
   const queuedIds = useRef(new Set<string>());
   const requestSequence = useRef(0);
@@ -71,6 +78,10 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
     .map((part) => part.text)).join("\n"), [history.entries]);
 
   useEffect(() => {
+    if (!lockSession.ready) sendQueue.current.suspend();
+  }, [lockSession.ready, lockSession.epoch]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
@@ -88,6 +99,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   }, [stopControl.canStop]);
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       const id = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId: id });
@@ -109,7 +121,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
       }
     }, 2000);
     return () => session.stop();
-  }, [paneId]);
+  }, [paneId, lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
     for (const outgoing of history.outgoing) {
@@ -118,6 +130,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
   }, [history.outgoing]);
 
   useEffect(() => {
+    if (!lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       try {
         const next = await fetchSnapshot(signal);
@@ -130,10 +143,10 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
       }
     }, 3000);
     return () => session.stop();
-  }, []);
+  }, [lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
-    if (!mirrorOpen) return;
+    if (!mirrorOpen || !lockSession.ready) return;
     const session = startAbortableSerialPolling(async (signal) => {
       setRawLoading(true);
       try {
@@ -150,7 +163,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
       }
     }, 2000);
     return () => session.stop();
-  }, [mirrorOpen, paneId]);
+  }, [mirrorOpen, paneId, lockSession.ready, lockSession.epoch]);
 
   const runtimeMessages = useMemo(() => {
     const optimistic = optimisticEntries(history);

@@ -35,7 +35,7 @@ export class PushEventConsumer {
           const occurrence = occurrences.get(event.occurrenceKey);
           const persona = await this.options.registry.get(event.personaId);
           if (occurrence && occurrence.personaId === event.personaId && occurrence.paneId === event.paneId && persona) {
-            await this.options.output.send({ version: 1, type: 'notification', title: persona.name, body: `${event.kind === 'task.completed' ? '任务完成' : '任务失败'}：${occurrence.title}${event.detail ? ` · ${event.detail}` : ''}`.slice(0, 500), tag: `homeling-task-${event.occurrenceKey}`, url: `/lite/t/${encodeURIComponent(event.paneId)}?occurrence=${encodeURIComponent(event.occurrenceKey)}`, occurrenceKey: event.dedupeKey });
+            await this.options.output.send({ version: 1, type: 'notification', title: persona.name, body: `${event.kind === 'task.completed' ? '任务完成' : '任务失败'}：${occurrence.title}${event.detail ? ` · ${event.detail}` : ''}`.slice(0, 500), bodyTemplate: { key: event.kind === 'task.completed' ? 'push.taskCompleted' : 'push.taskFailed', params: { taskTitle: occurrence.title, detail: event.detail ?? '' } }, tag: `homeling-task-${event.occurrenceKey}`, url: `/lite/t/${encodeURIComponent(event.paneId)}?occurrence=${encodeURIComponent(event.occurrenceKey)}`, occurrenceKey: event.dedupeKey });
           }
         }
         await this.options.store.mutate(state => ({ next: { ...state, activityCursor: Math.max(state.activityCursor, event.sequence) }, result: undefined }), this.options.admission);

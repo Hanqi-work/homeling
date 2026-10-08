@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "shell-fixture" }); sessionState.caughtUp(); });
 import { Window } from "happy-dom";
 import { act } from "react";
 import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router";
@@ -20,7 +22,7 @@ beforeAll(async () => {
   }
   ({ createRoot } = await import("react-dom/client"));
 });
-afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; });
+afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; sessionState.lock(); });
 afterAll(() => {
   for (const [key, descriptor] of saved) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -124,7 +126,7 @@ test("unknown deletion stays visible across empty-list polling and a later locke
     if (init?.method === "DELETE") {
       writes++;
       if (writes === 1) throw new Error("connection lost");
-      return Response.json({ error: "Session locked" }, { status: 423 });
+      return Response.json({ error: "Session locked", executed: false, deliveryUnknown: false }, { status: 423 });
     }
     if (String(url).endsWith("persona/list")) return Response.json({ personas: writes > 0 ? [] : [persona] });
     return Response.json({ paneId: "p", available: false, reason: "no-log" });

@@ -69,6 +69,11 @@ export class SessionLock {
     this.sessions.set(verifier(token), lease);
     return { token, state: this.state(token, subject) };
   }
+  revokeAll(): void {
+    for (const lease of this.sessions.values()) lease.locked = true;
+    this.sessions.clear();
+    this.epoch++;
+  }
   state(token: string | undefined, subject: string): SessionState {
     if (!token) return { locked: true };
     const lease = this.sessions.get(verifier(token));

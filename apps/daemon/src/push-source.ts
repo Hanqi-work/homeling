@@ -50,8 +50,8 @@ export async function readPendingPushBatch(cfg: DaemonConfig, fetcher: BridgeFet
       if (!specific.trim()) continue; // Do not send a generic permission title without the operation.
       const summary = `需要你批准 ${specific.replace(/\s+/g, ' ').trim()}`;
       // Ignore pointer movement / terminal context redraw, but bind concrete operation+options.
-      const identity = JSON.stringify({ kind: detected.kind, question: detected.question, subject: specific, options: detected.options.map(o => ({ id: o.id, label: o.label })) });
-      observations.push({ state: 'pending', binding, personaName, url, identity, summary });
+      const identity = JSON.stringify({ kind: detected.kind, question: detected.question, subject: detected.subject.join(' '), options: detected.options.map(o => ({ id: o.id, label: o.label })) });
+      observations.push({ state: 'pending', binding, personaName, url, identity, summary, bodyTemplate: { key: 'push.approval', params: { question: specific.replace(/\s+/g, ' ').trim() } } });
     } catch { /* Gap leaves durable pending occurrence untouched; next successful read reconciles. */ }
   }
   return { validBindings, observations };

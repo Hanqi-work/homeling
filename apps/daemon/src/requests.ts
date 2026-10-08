@@ -276,9 +276,11 @@ export class PendingRequestStore {
         return null;
       }
       const options = detected.options.map(({ id, label }) => ({ id, label }));
+      const { personaId: _oldPersonaId, ...baseRequest } = existing;
+      const ownedRequest = { ...baseRequest, ...(personaId ? { personaId } : {}) };
       const refreshed: PendingRequest = detected.kind === "preview-select"
-        ? { ...existing, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
-        : { ...existing, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
+        ? { ...ownedRequest, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
+        : { ...ownedRequest, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
       this.requests = upsertPendingRequest(this.requests, refreshed);
       this.actions.set(active.id, new Map(detected.options.map((option) => [option.id, option.keys])));
       this.expire(now);

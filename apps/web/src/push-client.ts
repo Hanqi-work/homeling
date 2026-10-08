@@ -1,6 +1,10 @@
+import { sessionMutationFetch } from './api.ts';
+
 export interface PushStatus { readonly publicKey: string; readonly preferences: { readonly enabled: boolean }; readonly subscriptions: readonly { readonly endpoint: string }[] }
 export async function pushApi<T>(action: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/lite/api/push/${action}`, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const response = body === undefined
+    ? await fetch(`/lite/api/push/${action}`, { cache: 'no-store' })
+    : await sessionMutationFetch(`/lite/api/push/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error(response.status === 423 ? '请先解锁 Homeling，再修改通知设置。' : `通知操作失败 (${response.status})`);
   return response.json() as Promise<T>;
 }

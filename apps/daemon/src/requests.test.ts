@@ -73,6 +73,16 @@ test('real task occurrence metadata preserves approval binding and expires the o
   expect(replacement.taskOccurrenceKey).toBe('task-run-2');
 });
 
+test('registry removal clears cached pending persona identity rather than retaining an archived owner', () => {
+  const store = new PendingRequestStore();
+  const detected = detectPendingRequest(permissionScreen)!;
+  const first = store.observe(pane, detected, Date.now(), 'persona-removed')!;
+  const refreshed = store.observe(pane, detected, Date.now(), undefined)!;
+  expect(refreshed.id).toBe(first.id);
+  expect(refreshed).not.toHaveProperty('personaId');
+  expect(store.listPending()[0]).not.toHaveProperty('personaId');
+});
+
 describe("pending request extraction", () => {
   test("extracts a real-shaped permission prompt and its selectable choices", () => {
     const detected = detectPendingRequest(permissionScreen);

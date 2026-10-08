@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PushPayload } from '../../../packages/contracts/src/push.ts';
+import type { PushBodyTemplate, PushPayload } from '@homeling/contracts';
 import type { PushPersistence } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 
@@ -10,6 +10,7 @@ export type PendingPushObservation = {
   readonly personaName: string;
   readonly identity: string;
   readonly summary: string;
+  readonly bodyTemplate?: PushBodyTemplate;
   readonly url: string;
 } | {
   readonly state: 'resolved';
@@ -60,6 +61,7 @@ export class PendingPushLedger {
         type: 'notification',
         title: observation.personaName.slice(0, 120),
         body: observation.summary.slice(0, 500),
+        ...(observation.bodyTemplate ? { bodyTemplate: observation.bodyTemplate } : {}),
         tag,
         url: observation.url,
         occurrenceKey: `request:${occurrenceKey}`,
