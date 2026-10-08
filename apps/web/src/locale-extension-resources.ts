@@ -1,5 +1,9 @@
 // Independent product copy. Columns: en, de, es, ko, ja, zh.
 export const extensionMessages = {
+  "persona.mainUnavailable": ["Main pane unavailable", "Hauptfenster nicht verfügbar", "Panel principal no disponible", "기본 패널 사용 불가", "メインペインは利用できません", "主面板不可用"],
+  "persona.agentStatusUnavailable": ["Active · agent status unavailable", "Aktiv · Agentenstatus nicht verfügbar", "Activo · estado del agente no disponible", "활성 · 에이전트 상태 사용 불가", "活動中 · エージェント状態不明", "活跃 · agent 状态不可用"],
+  "task.created": ["Task created", "Aufgabe erstellt", "Tarea creada", "작업 생성됨", "タスクを作成", "任务已创建"],
+  "task.unknown": ["Result unknown", "Ergebnis unklar", "Resultado desconocido", "결과 불명", "結果不明", "结果不明"],
   "memory.label": ["Persona memory", "Homeling-Erinnerungen", "Memoria del Homeling", "동료 기억", "仲間の記憶", "Persona 记忆"],
   "memory.title": ["Persistent memory", "Dauerhafte Erinnerungen", "Memoria persistente", "영구 기억", "永続的な記憶", "持久记忆"],
   "memory.nextSession": ["Saved changes apply next session; the current session does not absorb them live.", "Gespeicherte Änderungen gelten ab der nächsten Sitzung; die aktuelle Sitzung übernimmt sie nicht sofort.", "Los cambios guardados se aplican en la próxima sesión; la actual no los incorpora en directo.", "저장한 변경 사항은 다음 세션에 적용됩니다. 현재 세션에는 즉시 반영되지 않습니다.", "保存した変更は次のセッションで適用されます。現在のセッションには即時反映されません。", "保存后下次会话生效；当前会话不会热吸收。"],

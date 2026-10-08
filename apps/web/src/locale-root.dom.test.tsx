@@ -54,6 +54,7 @@ function fakeServer(onReply: () => Promise<Response>) {
     if (url.endsWith("/requests")) return Response.json([]);
     if (url.endsWith("/launchers")) return Response.json({ launchers: [] });
     if (url.includes("/history")) return Response.json({ paneId: "p1", available: true, entries: [], hasMore: false, total: 0, fileTruncated: false });
+    if (url.endsWith("/pane/p1")) return Response.json({ paneId: "p1", text: "Original terminal output 原文", truncated: false });
     throw new Error(`Unexpected fake request: ${url} ${init?.method}`);
   }) as typeof fetch;
   return { sessionWrites: () => sessionWrites };
@@ -64,6 +65,16 @@ async function mount(path = "/p/p1") {
   await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={[path]}><Location />{path !== "/settings" ? <LanguageSettings /> : null}<AppRoot slots={{ settings: <button data-other-settings>Push settings extension</button> }} /></MemoryRouter></LocaleProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
 }
+test("production task metadata and mirror controls change locale without translating terminal output", async () => {
+  fakeServer(async () => { throw new Error("unexpected business write"); });
+  await mount("/t/p1"); await unlock();
+  await act(async () => [...container.querySelectorAll("button")].find((item) => item.textContent === "View raw pane output")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  await changeLocale("de");
+  expect(container.textContent).toContain("Original-Pane ausblenden");
+  expect(container.textContent).toContain("Aufgabe p1");
+  expect(container.querySelector('[data-testid="pane-mirror"]')?.textContent).toBe("Original terminal output 原文");
+  expect(container.querySelector("[data-location]")?.textContent).toBe("/t/p1");
+});
 test("locked language control changes only local copy and does not unlock or write a session", async () => {
   const server = fakeServer(async () => { throw new Error("unexpected business write"); });
   await mount("/settings");

@@ -15,6 +15,7 @@ function request(body: unknown = { action: "interrupt", identity, confirmed: tru
     if (!Object.hasOwn(headers, "origin")) requestHeaders.delete("origin");
   }
   return Object.assign(new Request(`http://localhost:8790${path}`, { method: "POST", headers: requestHeaders, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
+
 }
 function bridge(options: { status?: string; changed?: boolean; truncated?: boolean; failure?: string } = {}) {
   const writes: Record<string, unknown>[] = [];

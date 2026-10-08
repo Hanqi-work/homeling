@@ -19,5 +19,7 @@ export function personaStatusLabel(persona: PersonaView, stale = false, t: Trans
   if (stale) return t("persona.statusUnavailable");
   if (persona.needsAttention) return t("persona.needsAttention");
   if (persona.paused) return t("persona.paused");
+  if (persona.statusSource === "missing") return t("persona.mainUnavailable");
+  if (persona.statusSource === "pane") return t("persona.agentStatusUnavailable");
   return t(`persona.${persona.status}`);
 }

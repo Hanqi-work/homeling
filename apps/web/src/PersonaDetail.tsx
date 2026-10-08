@@ -56,7 +56,7 @@ export function PersonaDetailContent({ persona, onDeleteStarted }: PersonaDetail
   }
   const base = `/persona/${encodeURIComponent(persona.id)}`;
   return <section>
-    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? t("personaDetail.deleted") : deleting ? t("personaDetail.deleting") : error ? t("personaDetail.deletionNeedsChecking") : personaStatusLabel(persona, false, t)}</p></div>
+    <div className="mb-8 flex flex-col items-center gap-4"><PersonaAvatar avatar={persona.avatar} size="detail" persona={removed || deleting || error ? undefined : persona} /><h1 id="persona-detail-title" className="text-3xl font-semibold tracking-tight">{persona.name}</h1><p className="text-sm text-neutral-400">{removed ? t("personaDetail.deleted") : deleting ? t("personaDetail.deleting") : error ? t("personaDetail.deletionNeedsChecking") : personaStatusLabel(persona, false, t)}</p></div>
     {result ? <p role="status" className="mb-5 rounded-xl border border-amber-800 p-4 text-sm text-amber-200">{t(result)}</p> : null}
     {!removed ? <>
       <h2 className="mb-3 text-sm font-medium text-neutral-400">{t("personaDetail.computers")}</h2>

@@ -11,9 +11,14 @@ import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { PendingRequestCard } from "./PendingRequestCard.tsx";
 import { ReplyRequestError } from "./api.ts";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
+import { ActivityTimeline } from "./ActivityPanel.tsx";
+import { RecordedTaskDetail } from "./ActivityTaskBoundary.tsx";
+import { PersonaCustomize } from "./PersonaCustomize.tsx";
+import { sessionState } from "./session-state.ts";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
+const originalFetch = globalThis.fetch;
 let root: Root;
 let container: HTMLElement;
 let createRoot: typeof import("react-dom/client").createRoot;
@@ -24,7 +29,7 @@ beforeAll(async () => {
   }
   ({ createRoot } = await import("react-dom/client"));
 });
-afterEach(async () => { await act(() => root?.unmount()); container?.remove(); window.localStorage.clear(); });
+afterEach(async () => { await act(() => root?.unmount()); container?.remove(); window.localStorage.clear(); globalThis.fetch = originalFetch; sessionState.lock(); });
 afterAll(() => {
   for (const [key, value] of saved) { if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); }
   window.close();
@@ -34,6 +39,39 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("avatar unknown-save warning and control labels translate without changing protocol values, name draft or replaying", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  sessionState.apply({ locked: false, epoch: 1, generation: "locale-avatar" }); sessionState.caughtUp();
+  let writes = 0;
+  const persona = { id: "locale-avatar", name: "Save changes 原文", avatar: { color: "#86efac", character: "curious", pet: "cat" }, spaceId: "s", mainPaneId: "p", createdAt: "2026-10-08", systemPrompt: "", status: "idle" };
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => init?.method === "PATCH" ? (writes++, Response.json({ error: "unknown", executed: true, deliveryUnknown: true }, { status: 503 })) : Response.json({ personas: [persona] })) as typeof fetch;
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><PersonaCustomize personaId={persona.id} /></LocaleProvider>));
+  const input = container.querySelector<HTMLInputElement>('input[name="name"]')!;
+  await act(async () => container.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  const select = container.querySelector<HTMLSelectElement>("#homeling-language")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Speicherergebnis unklar");
+  expect(container.textContent).toContain("Gespeicherte Anpassung prüfen");
+  expect(container.querySelector('input[name="name"]')).toBe(input);
+  expect(input.value).toBe("Save changes 原文");
+  expect(container.querySelector<HTMLSelectElement>('select[name="character"]')?.value).toBe("curious");
+  expect(container.querySelector<HTMLSelectElement>('select[name="pet"]')?.value).toBe("cat");
+  expect(writes).toBe(1);
+});
+test("activity metadata and historical no-control explanation translate while task title and detail stay original", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const occurrence = { occurrenceKey: "o", personaId: "m", spaceId: "s", paneId: "p", title: "Original task title", createdAt: "2026-10-08T00:00:00Z", status: "unknown" as const };
+  const activity = { observation: "gap" as const, occurrences: [occurrence], events: [{ id: "e", sequence: 1, dedupeKey: "d", kind: "task.failed" as const, personaId: "m", paneId: "p", occurrenceKey: "o", occurredAt: occurrence.createdAt, source: "herdr.event" as const, detail: "Agent original error 原文" }] };
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><MemoryRouter><ActivityTimeline activity={activity} personaId="m" /><RecordedTaskDetail occurrence={occurrence} returnTo="/" reason="activity.differentOccurrence" /></MemoryRouter></LocaleProvider>));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "ja"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.textContent).toContain("タスク失敗");
+  expect(container.textContent).toContain("ライブ操作");
+  expect(container.textContent).toContain("Original task title");
+  expect(container.textContent).toContain("Agent original error 原文");
+  expect(container.querySelector('a[href="/t/p?occurrence=o"]')).not.toBeNull();
+  expect(container.querySelector("[data-task-occurrence=o] button")).toBeNull();
+});
 test("memory labels, fixed injection metadata and blocked-save notice switch language without rewriting documents or replaying", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   let writes = 0;

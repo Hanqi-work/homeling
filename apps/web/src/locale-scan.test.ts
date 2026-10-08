@@ -7,7 +7,7 @@ import { localeResources } from "./locale-resources.ts";
 
 const sourceRoot = dirname(import.meta.path);
 // Delivered migrated surfaces only for this phase. Expand to every production TSX after all final tips.
-const migratedSurfaces = ["App.tsx", "PersonaDetail.tsx", "ConversationMessage.tsx", "PendingRequestCard.tsx", "RawPaneMirror.tsx", "TaskChip.tsx", "ReplyComposer.tsx", "SpecialKeyBar.tsx", "PersonaMemoryEditor.tsx", "SessionBoundary.tsx", "AppRoot.tsx", "locale.tsx"];
+const migratedSurfaces = ["App.tsx", "PersonaDetail.tsx", "ConversationMessage.tsx", "PendingRequestCard.tsx", "RawPaneMirror.tsx", "TaskChip.tsx", "ReplyComposer.tsx", "SpecialKeyBar.tsx", "PersonaMemoryEditor.tsx", "SessionBoundary.tsx", "AppRoot.tsx", "locale.tsx", "PersonaAvatar.tsx", "PersonaCustomize.tsx", "ActivityPanel.tsx", "ActivityTaskBoundary.tsx", "TaskDetailPage.tsx", "main.tsx"];
 const technicalText = new Set(["Ctrl+C", "Esc", "Enter", "Cmd", "→", "·", ":"]);
 test("migrated surfaces contain no untranslated product JSX text or accessible names", async () => {
   const violations: string[] = [];
