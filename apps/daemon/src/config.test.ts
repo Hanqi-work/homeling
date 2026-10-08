@@ -60,4 +60,10 @@ describe("daemonConfigFromEnv", () => {
     const c = daemonConfigFromEnv({ HOMELING_PORT: "not-a-port" });
     expect(c.port).toBe(8790);
   });
+
+  test("bridge origin must remain a loopback HTTP origin", () => {
+    expect(() => daemonConfigFromEnv({ HOMELING_BRIDGE_ORIGIN: "https://bridge.example.com" })).toThrow(/loopback HTTP origin/);
+    expect(() => daemonConfigFromEnv({ HOMELING_BRIDGE_ORIGIN: "http://127.0.0.1:8787/api" })).toThrow(/loopback HTTP origin/);
+    expect(daemonConfigFromEnv({ HOMELING_BRIDGE_ORIGIN: "http://127.0.0.2:8788/" }).bridgeOrigin).toBe("http://127.0.0.2:8788");
+  });
 });

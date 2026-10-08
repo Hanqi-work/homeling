@@ -19,9 +19,15 @@ export interface DaemonConfig {
   readonly tailscaleHost: string;
   /** Operator opt-out mirroring Collie's COLLIE_ALLOW_ANY_HOST. */
   readonly allowAnyHost: boolean;
+  /**
+   * Origin of the Collie bridge the daemon re-proxies /api/* from (ADR-0005). Loopback only —
+   * the proxy hop never leaves this machine, and the bridge's own gate stays authoritative.
+   */
+  readonly bridgeOrigin: string;
 }
 
 const DEFAULT_PORT = 8790;
+const DEFAULT_BRIDGE_ORIGIN = "http://127.0.0.1:8787";
 
 function repoRoot(): string {
   // apps/daemon/src/config.ts → repo root is three levels up.
@@ -32,6 +38,22 @@ function readPort(v: string | undefined): number {
   if (!v) return DEFAULT_PORT;
   const n = Number(v);
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT;
+}
+
+function readBridgeOrigin(value: string | undefined): string {
+  const raw = value?.trim() || DEFAULT_BRIDGE_ORIGIN;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("HOMELING_BRIDGE_ORIGIN must be a loopback HTTP origin");
+  }
+  const hostname = url.hostname.toLowerCase();
+  const loopback = hostname === "localhost" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  if (!loopback || url.protocol !== "http:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("HOMELING_BRIDGE_ORIGIN must be a loopback HTTP origin");
+  }
+  return url.origin;
 }
 
 export function daemonConfigFromEnv(env: Record<string, string | undefined>): DaemonConfig {
@@ -45,6 +67,7 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
   const allowAnyHost = ["1", "true", "yes"].includes(
     (env.HOMELING_ALLOW_ANY_HOST ?? process.env.HOMELING_ALLOW_ANY_HOST ?? "").toLowerCase(),
   );
+  const bridgeOrigin = readBridgeOrigin(env.HOMELING_BRIDGE_ORIGIN ?? process.env.HOMELING_BRIDGE_ORIGIN);
   return {
     port,
     hostname: "127.0.0.1",
@@ -53,5 +76,6 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     trustedUsers,
     tailscaleHost,
     allowAnyHost,
+    bridgeOrigin,
   };
 }

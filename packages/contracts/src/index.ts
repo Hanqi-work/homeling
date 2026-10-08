@@ -10,3 +10,6 @@ export type {
 
 export type { ConversationRow, WorkspaceGroup } from "./messages.ts";
 export { paneToRow, snapshotToGroups } from "./messages.ts";
+
+export type { PaneHistoryResponse, TranscriptEntry, TranscriptPart, UiMessage, UiContentPart } from "./history.ts";
+export { transcriptToMessages, mergeTranscripts } from "./transcript.ts";

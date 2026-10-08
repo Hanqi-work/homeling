@@ -1,8 +1,22 @@
-import type { SnapshotResponse } from "@homeling/contracts";
+import type { PaneHistoryResponse, SnapshotResponse } from "@homeling/contracts";
 
-/** Same-origin `/api/*` lives at the Collie root, not under the `/lite` mount. */
-export async function fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
-  const res = await fetch("/api/snapshot", { signal, headers: { accept: "application/json" } });
-  if (!res.ok) throw new Error(`/api/snapshot ${res.status}`);
-  return (await res.json()) as SnapshotResponse;
+const API_PREFIX = `${import.meta.env.BASE_URL}api/`;
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(`${API_PREFIX}${path}`, {
+    signal,
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`${path} ${res.status}`);
+  return (await res.json()) as T;
+}
+
+/** Same-origin daemon reverse proxy; the browser never connects to Collie's :8787. */
+export function fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
+  return getJson("snapshot", signal);
+}
+
+export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: string): Promise<PaneHistoryResponse> {
+  const cursor = before ? `?before=${encodeURIComponent(before)}` : "";
+  return getJson(`pane/${encodeURIComponent(paneId)}/history${cursor}`, signal);
 }

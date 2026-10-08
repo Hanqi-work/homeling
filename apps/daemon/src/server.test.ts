@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { handleRequest } from "./index.ts";
+import type { BridgeFetch } from "./bridge-proxy.ts";
 
 const ROOT = join(import.meta.dir, ".tmp-server-fixture");
 const TAILSCALE_HOST = "rolexdemacbook-air.tail616cc1.ts.net";
@@ -14,6 +15,7 @@ const CFG = {
   trustedUsers: ["me@github.com"] as readonly string[],
   tailscaleHost: TAILSCALE_HOST,
   allowAnyHost: false,
+  bridgeOrigin: "http://127.0.0.1:8787",
 };
 
 function req(opts: {
@@ -46,6 +48,37 @@ describe("handleRequest — routing", () => {
     const res = await handleRequest(req({ remoteAddress: "127.0.0.1", host: "localhost:8790", path: "/lite/api/health" }), CFG);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, service: "homeling-daemon" });
+  });
+
+  test("proxies the full /lite/api path to the allowlisted bridge history route", async () => {
+    let target = "";
+    const forwardedLogins: Array<string | null> = [];
+    const fetcher: BridgeFetch = async (input, init) => {
+      target = String(input);
+      forwardedLogins.push(new Headers(init?.headers).get("tailscale-user-login"));
+      return Response.json({ available: true, entries: [] }, { headers: { etag: "\"history-1\"" } });
+    };
+    const response = await handleRequest(
+      req({ remoteAddress: "127.0.0.1", host: "localhost:8790", login: "me@github.com", path: "/lite/api/pane/w1:p2/history?limit=30" }),
+      CFG,
+      fetcher,
+    );
+
+    expect(response.status).toBe(200);
+    expect(target).toBe("http://127.0.0.1:8787/api/pane/w1:p2/history?limit=30");
+    expect(forwardedLogins).toEqual(["me@github.com"]);
+    expect(response.headers.get("etag")).toBe("\"history-1\"");
+  });
+
+  test("proxy rejects writes and paths outside the narrow read allowlist", async () => {
+    let calls = 0;
+    const fetcher: BridgeFetch = async () => { calls += 1; return Response.json({}); };
+    const base = { remoteAddress: "127.0.0.1", host: "localhost:8790" };
+    const write = await handleRequest(req({ ...base, path: "/lite/api/snapshot", method: "POST" }), CFG, fetcher);
+    const forbidden = await handleRequest(req({ ...base, path: "/lite/api/pane/p1/reply" }), CFG, fetcher);
+    expect(write.status).toBe(405);
+    expect(forbidden.status).toBe(404);
+    expect(calls).toBe(0);
   });
 
   test("GET /lite/ serves the SPA index", async () => {

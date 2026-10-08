@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.25",
+    "@assistant-ui/react-markdown": "^0.14.19",
     "@homeling/contracts": "workspace:*",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
