@@ -105,7 +105,7 @@ daemon 启动可能需要片刻，若立即检查失败，先查 launchd / 日�
 
 手机走一轮“派活 → 审批 → 收结果”；确认发送正文进入 history 后才显示“已送达”（HTTP 2xx 不等于 agent 已消费）。中断按钮仅请求 Ctrl+C，不关闭 pane，不保证进程已终止，后续状态才是依据；launch 超时也不证明上游已回滚，残留需查看原始 pane / 旧 UI 排查。
 
-PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`，更新有刷新提示。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作、锁屏 push 或 idle-lock 已完成。
+PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`。当前更新检测仅写 console，并提供调试入口 `window.__homelingApplyUpdate()`，**没有用户可见的更新提示或刷新按钮**。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作、锁屏 push 或 idle-lock 已完成。
 
 ## 更新与卸载
 
@@ -118,7 +118,7 @@ launchctl kickstart -k "gui/$(id -u)/com.homeling.daemon"
 HOMELING_CANARY_DAEMON_URL=http://127.0.0.1:8790 bash scripts/canary.sh check
 ```
 
-`build-web.sh` 冻结安装依赖并构建 web，只写本仓库。更新后按提示刷新 PWA；排障时可仅清理 `/lite/` 的缓存/SW，不注销 Collie 根 SW。更新前后金丝雀命令使用同一 `HOMELING_CANARY_STATE`。
+`build-web.sh` 冻结安装依赖并构建 web，只写本仓库。更新后手动刷新并核对版本；若新 SW 仍处于 waiting，普通刷新未必切换版本，当前需通过浏览器调试入口调用 `window.__homelingApplyUpdate()`，再验证页面更新。排障时可仅清理 `/lite/` 的缓存/SW，不注销 Collie 根 SW。更新前后金丝雀命令使用同一 `HOMELING_CANARY_STATE`。
 
 卸载只删自己的 handler 与 user agent，不动 Collie，也不终止已有 herdr panes：
 
