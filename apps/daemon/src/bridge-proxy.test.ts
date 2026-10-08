@@ -24,6 +24,7 @@ describe("allowBridgePath — the narrow allowlist", () => {
     expect(allowBridgePath("/api/snapshot")).toBe(true);
     expect(allowBridgePath("/api/pane/w5N:p1")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/history")).toBe(true);
+    expect(allowBridgePath("/api/pane/w1:p2", "GET")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/keys", "POST")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/reply", "POST")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/keys")).toBe(false);
@@ -82,6 +83,42 @@ describe("proxyTargetUrl", () => {
     expect(() => proxyTargetUrl("/lite/api/pane/p1/%2e%2e/history", cfg)).toThrow();
     expect(() => proxyTargetUrl("/lite/api/snapshot/../config", cfg)).toThrow();
     expect(() => proxyTargetUrl("/lite/api/pane/p1/reply", cfg)).toThrow();
+  });
+
+  test("GET pane screen proxies the existing read-only terminal output route", async () => {
+    let target = "";
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/w1:p2"), cfg, async (input) => {
+      target = String(input);
+      return Response.json({ paneId: "w1:p2", text: "read-only screen" });
+    });
+    expect(target).toBe(`${cfg.bridgeOrigin}/api/pane/w1:p2`);
+    expect(await response.json()).toEqual({ paneId: "w1:p2", text: "read-only screen" });
+  });
+
+  test("POST stop sends only server-authored Ctrl-C to the existing keys route", async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: await new Response(init?.body).text() });
+      return Response.json({ ok: true });
+    };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/w1:p2/stop", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"keys":["rm -rf /"]}',
+    }), cfg, fetcher);
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{ url: `${cfg.bridgeOrigin}/api/pane/w1:p2/keys`, body: '{"keys":["ctrl+c"]}' }]);
+
+    let blockedCalls = 0;
+    const wrongType = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/w1:p2/stop", {
+      method: "POST", headers: { "content-type": "text/plain" }, body: "stop",
+    }), cfg, async () => { blockedCalls++; return Response.json({ ok: true }); });
+    expect(wrongType.status).toBe(415);
+    expect(blockedCalls).toBe(0);
+  });
+
+  test("stop route rejects methods, query parameters, and reserved pane IDs", () => {
+    expect(() => proxyTargetUrl("/lite/api/pane/p1/stop", cfg, "GET")).toThrow();
+    expect(() => proxyTargetUrl("/lite/api/pane/p1/stop?keys=ctrl+c", cfg, "POST")).toThrow();
+    expect(() => proxyTargetUrl("/lite/api/pane/history/stop", cfg, "POST")).toThrow();
   });
 
   test("POST keys is not exposed as a direct browser proxy route", async () => {

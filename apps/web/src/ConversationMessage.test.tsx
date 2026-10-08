@@ -46,6 +46,7 @@ describe("ConversationMessage — external store runtime", () => {
     expect(markup).toContain("<strong>hello</strong>");
     expect(markup).toContain("bg-green-800");
     expect(markup).toContain("Bash: run command");
+    expect(markup).not.toContain("<details open");
     expect(markup).toContain("pwd");
     expect(markup).toContain("tool output");
     expect(markup).toContain("tool error or denied");
