@@ -16,6 +16,15 @@
 - invalid cleanup 放在所有健康 endpoint 派发之后，cleanup 错误仍显式向调用者传播；全部投递失败通过公开 report 与生产日志可观测，unknown 不自动重试。
 - 已按 code-simplifier 建议减少单成员 SHA/count 运算、展开协调状态 mutation、合并测试 import；不删除读/claim/取消时点保护。
 - titleTemplate/summaryTemplate count=distinct personaId；原名字/问题保留，locale 不进入 tag 或 occurrence。transport 白名单仍仅发送实际显示字段。
+- 顾问要求补生产接线及 cursor 证据：新增 createPushPolling 的 source→实际 store/output 跨 2500ms polls 测试，3000ms debounce、hung send 可继续 resolved、stop 不再外发；实际 ActivityLedger/PushStore 双重重启后旧 cursor 不重发，新用户 trusted launch 的 working→done 可推。尊重 #13 epoch：不会从旧已完成 pane 的重启快照补造新 work cycle。
+
+## Verification
+- 显式 merge 本票 feature 与最新 integrate-v1 6e7ed8f0（#15 dependency b6440f03），作者 rolex <torolex@163.com>；未修改 integration bookmark。
+- 本机 Bun 1.3.12：bun test 465 pass / 0 fail（84 files）；bun run typecheck / bun run build 均通过。既有 React act 警告和 activity 故障注入日志不代表失败。
+- 普通独立 review 与简化均使用只读 agent；a51466a41600955e0 最终增量 review 在可观察 v1 边界下 0 高置信阻塞，确认原子墓碑/错峰合并/claim-dispatch 与真实 ledger/cursor 回归。审查不背书执行器的全量三绿或最终 freeze，二者由执行器独立验证。
+
+## OPEN / partial requirement
+- 完整的“同内容新审批 incarnation 均可推”仍 partial：不可观察 generation 没有可信事件生产者，不在本票伪造实现。上文 fail-closed 限制、人工确认及后续可信 request-generation 契约仍 OPEN；本票交付可观察边界内的 debounce/coalesce/取消/持久去重/清理，不宣称整项无限覆盖。
 
 ## Deviations
 - 暂停期间未实现。workspace add 配合 ignore-working-copy 部分失败，早期空 workspace 已仅在自身新 child 修正；恢复后从实际 integration 6e7e 新 child，未重写他人历史。
