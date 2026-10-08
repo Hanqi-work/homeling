@@ -4,6 +4,7 @@ import type { BridgeFetch } from "./bridge-proxy.ts";
 import type { ActivityLedger } from "./activity-ledger.ts";
 import { dispatchTaskCreation } from "./mutation-result.ts";
 import type { DaemonConfig } from "./config.ts";
+import { controlKeyBlocksText } from "./control-key.ts";
 import { HerdrRpcError, type HerdrCreatedSpace, type HerdrPane, type HerdrPort, type HerdrSnapshot } from "./herdr-client.ts";
 import { awaitAgentReady, awaitPaneReady } from "./persona-readiness.ts";
 import { newPersonaId, PersonaRegistry, type Persona, type PersonaAvatar } from "./persona-registry.ts";
@@ -240,6 +241,9 @@ export function sendPersonaMessage(
       : text;
     let response: Response;
     try {
+      if (controlKeyBlocksText(runtime.cfg, persona.mainPaneId)) {
+        return Response.json({ ok: false, textDelivered: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
+      }
       response = await admission.dispatch(() => runtime.fetcher(
         `${runtime.cfg.bridgeOrigin}/api/pane/${encodeURIComponent(persona.mainPaneId)}/reply`,
         { method: "POST", headers, body: JSON.stringify({ text: submittedText, submit: true }) },

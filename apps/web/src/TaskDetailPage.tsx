@@ -8,6 +8,7 @@ import { ConversationMessage } from "./ConversationMessage.tsx";
 import { historyReducer, initialHistoryState, optimisticEntries, type OutgoingMessage } from "./history-reducer.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 import { RawPaneMirror } from "./RawPaneMirror.tsx";
+import { ActivityTaskBoundary } from "./ActivityTaskBoundary.tsx";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { enqueueTaskSend, createTaskSendQueue, stopControlState, taskAvailability, taskRuntimeMinutes } from "./task-detail.ts";
 
@@ -297,5 +298,9 @@ export function TaskDetailPage(): ReactElement {
   const paneId = routePaneId ?? "";
   if (!paneId) return <main className="p-6 text-sm">pane id missing</main>;
   const state = routeState(location.state, paneId);
+  const occurrenceKey = new URLSearchParams(location.search).get("occurrence");
+  if (occurrenceKey) return <ActivityTaskBoundary key={occurrenceKey} paneId={paneId} occurrenceKey={occurrenceKey} returnTo={state.returnTo ?? "/"}>
+    {(occurrence) => <TaskConversation key={occurrence.occurrenceKey} paneId={paneId} taskHint={{ paneId, createdAt: Date.parse(occurrence.createdAt), launcher: { command: "", label: occurrence.title }, status: "working" }} returnTo={state.returnTo ?? "/"} />}
+  </ActivityTaskBoundary>;
   return <TaskConversation key={paneId} paneId={paneId} taskHint={state.task} returnTo={state.returnTo ?? "/"} />;
 }

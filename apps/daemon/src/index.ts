@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { ActivityLedger } from "./activity-ledger.ts";
 import { createActivityObserver } from "./activity-observer.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
-import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
+import { controlKeyBlocksText, sendControlKey } from "./control-key.ts";
+import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
 import { HerdrRpcError, HerdrSocketClient } from "./herdr-client.ts";
@@ -145,7 +146,7 @@ export async function handleRequest(
     return method === "GET" || method === "HEAD" ? upstreamFetch(target, init) : admission!.dispatch(() => upstreamFetch(target, init));
   };
   const isBridgeWritePost = req.method === "POST" && (
-    pathname === `${BROWSER_API_PREFIX}launch` || pathname === `${BROWSER_API_PREFIX}stt` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop)$/.test(pathname)
+    pathname === `${BROWSER_API_PREFIX}launch` || pathname === `${BROWSER_API_PREFIX}stt` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop|control-key)$/.test(pathname)
   );
   const isApprovalPost = req.method === "POST" && /^\/lite\/api\/requests\/[^/]+\/approve$/.test(pathname);
   const isPersonaWriteRequest = isPersonaWrite(pathname) && req.method !== "GET";
@@ -160,7 +161,7 @@ export async function handleRequest(
     return Response.json({ ok: true, service: "homeling-daemon" });
   }
 
-  const runtime = runtimeOverride ?? personaRuntime(cfg, fetcher);
+  const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
   const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
   const occurrenceMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)$/);
   if (activityMatch || occurrenceMatch) {
@@ -237,6 +238,9 @@ export async function handleRequest(
   }
 
   const store = requestStore(cfg);
+  if (req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/control-key$/.test(pathname)) {
+    return sendControlKey(req, cfg, fetcher, store);
+  }
   if (pathname === API_REQUESTS_PATH && req.method === "GET") {
     try {
       return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login")));
@@ -295,6 +299,14 @@ export async function handleRequest(
     }
     if (req.method !== "GET" && req.method !== "POST") {
       return new Response("method not allowed\n", { status: 405, headers: { allow: "GET, POST" } });
+    }
+    if (req.method === "POST" && /\/reply$/.test(pathname)) {
+      let target: URL;
+      try { target = new URL(proxyTargetUrl(pathname + new URL(req.url).search, cfg, "POST")); }
+      catch { return new Response("not found\n", { status: 404 }); }
+      if (controlKeyBlocksText(cfg, target.pathname.split("/")[3]!)) {
+        return Response.json({ ok: false, textDelivered: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
+      }
     }
     return proxyBridgeRequest(req, cfg, fetcher);
   }
