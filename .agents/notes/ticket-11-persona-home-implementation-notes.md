@@ -23,7 +23,7 @@
 - 未新增env要求，不改README。#19尚非整票完成：仅actual contract依赖，不宣称业务完整写锁已生效；完整guard/boundary由其后续合入与交叉验收，父已明确允许完整#11先交付。
 - 冻结feature revision ddd9d6bf88c5e74df627a34b4e297795b1f36675，作者rolex <torolex@163.com>；base integration 3a322b2f。最终 `bun test` 286 pass / 0 fail（1074 assertions、42 files），`bun run typecheck` 与 `bun run build` 全部成功。没有package.json `verify-seams`脚本，未声称该额外命令通过。
 - 独立code-reviewer a5d64c87838234114首轮真实阻塞0；focused fake DOM/mock fetch 13 passed。顾问增量经主协调转达仅剩deleted:false洗掉此前unknown风险；已另一个red→green DOM切片修为“本次未确认删除”，保留此前unknown风险，未扩API/slots，未重写冻结ddd9d6bf。
-- 最终增量后 `bun test` **287 pass / 0 fail**（1080 assertions、42 files），`bun run typecheck` 与 `bun run build` 全部成功；integration最新仍3a322b2fc942b158e31ab97fbd02ea91315467cb。普通code-reviewer增量复核待返回。临时Vite验收进程已停止，browser taskspace已关闭。
+- 最终增量后 `bun test` **287 pass / 0 fail**（1080 assertions、42 files），`bun run typecheck` 与 `bun run build` 全部成功；integration最新仍3a322b2fc942b158e31ab97fbd02ea91315467cb。主协调转达唯一merger两轴critical+e9d9ddb最小delta独立只读0阻塞，已ready排入串行合入复验。额外fake persona.integration+删除DOM/API26tests通过。feature冻结e9d9ddb17a4a31939ba362ebb1d17893654f9bc6（ddd9d6bf子代），不再重写；本notes最终记录为新child。普通code-reviewer若增量返回新增真实mustfix立即另报主协调。临时Vite验收进程已停止，browser taskspace已关闭。
 
 ## Consumer wiring
 - `App({slots?: PersonaShellSlots})`，`shell-slots.ts`定义 `homeSummary?:ReactNode; memory/activity/customize?:(personaId:string)=>ReactNode; settings?:ReactNode`。
