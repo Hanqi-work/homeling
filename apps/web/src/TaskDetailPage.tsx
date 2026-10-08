@@ -297,7 +297,7 @@ function TaskConversation({ paneId, taskHint, returnTo }: { paneId: string; task
               <button type="button" onClick={() => sendMessage(message.text, message)} disabled={queuedIds.current.has(message.id)} className="shrink-0 rounded-lg border border-red-800 px-3 py-1.5 text-red-200">Retry</button>
             </div>)}
           </section> : null}
-          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={composerBlocked} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={composerBlocked} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>

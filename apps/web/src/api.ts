@@ -12,6 +12,30 @@ export async function sessionMutationFetch(input: RequestInfo | URL, init: Reque
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
+/** Raw audio in, editable text out. This endpoint is deliberately pane-agnostic. */
+export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<string> {
+  const response = await sessionMutationFetch(`${API_PREFIX}stt`, {
+    method: "POST", body: audio,
+    headers: { accept: "application/json", "content-type": audio.type || "audio/webm" },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
+  });
+  let result: { ok?: boolean; text?: unknown; code?: string } = {};
+  try { result = await response.json() as typeof result; } catch {
+    throw new Error(`转写失败（${response.status}），请重试。`);
+  }
+  if (!response.ok || result.ok !== true || typeof result.text !== "string") {
+    const message = result.code === "stt.unconfigured" || response.status === 503
+      ? "语音转写未配置或不可用，请在电脑上检查 Collie STT 设置。"
+      : response.status === 429 ? "转写服务忙，请稍后重试。"
+      : response.status === 413 ? "录音过大，请缩短后重试。"
+      : response.status === 415 ? "录音格式不受支持，请换浏览器重试。"
+      : response.status === 504 ? "转写超时，请重试。"
+      : `转写失败（${response.status}），请重试。`;
+    throw new Error(message);
+  }
+  return result.text;
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_PREFIX}${path}`, {
     signal,
@@ -39,6 +63,30 @@ export async function createPersona(input: { name: string; avatar: { color: stri
   const result = await response.json().catch(() => null) as { persona?: PersonaView; error?: string } | null;
   if (!response.ok || !result?.persona) throw new Error(result?.error ?? `Create persona failed (${response.status})`);
   return result.persona;
+}
+
+export interface PersonaDeleteResult {
+  readonly deleted: boolean;
+  readonly archived: boolean;
+}
+
+export class PersonaDeleteError extends Error {
+  constructor(message: string, readonly notDispatched = false) {
+    super(message);
+    this.name = "PersonaDeleteError";
+  }
+}
+
+export async function deletePersona(personaId: string): Promise<PersonaDeleteResult> {
+  try { sessionState.admit()(); } catch { throw new PersonaDeleteError("Unlock Homeling before deleting", true); }
+  const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+    method: "DELETE", headers: { accept: "application/json", "content-type": "application/json" }, body: "{}",
+  });
+  const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string; executed?: boolean; deliveryUnknown?: boolean }) | null;
+  if (!response.ok || typeof result?.deleted !== "boolean" || typeof result.archived !== "boolean") {
+    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423 && result?.executed === false && result.deliveryUnknown === false);
+  }
+  return { deleted: result.deleted, archived: result.archived };
 }
 
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
@@ -153,6 +201,37 @@ export async function stopPaneTask(paneId: string): Promise<void> {
     // Preserve an HTTP-level error when the bridge is unavailable.
   }
   if (!response.ok || result.ok !== true) throw new Error(result.error ?? `stop ${response.status}`);
+}
+
+export type ControlKeyAction = "interrupt" | "escape";
+export interface ControlKeyResult {
+  outcome: "accepted" | "not-submitted" | "unknown";
+  error?: string;
+}
+
+/** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
+export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string): Promise<ControlKeyResult> {
+  try {
+    const response = await sessionMutationFetch(`${API_PREFIX}pane/${encodeURIComponent(paneId)}/control-key`, {
+      method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
+    });
+    let value: unknown;
+    try { value = await response.json(); } catch { /* HTTP rejection below is still definite. */ }
+    if (value && typeof value === "object" && "outcome" in value) {
+      const result = value as ControlKeyResult;
+      if ((response.ok && result.outcome === "accepted") || result.outcome === "not-submitted" || result.outcome === "unknown") {
+        return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
+      }
+    }
+    if (response.status === 423 && value && typeof value === "object") {
+      return { outcome: (value as { deliveryUnknown?: boolean }).deliveryUnknown === true ? "unknown" : "not-submitted", error: "Unlock Homeling before controlling the pane" };
+    }
+    return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
+  } catch (error) {
+    if (error instanceof ReplyRequestError && error.textDelivered === false) return { outcome: "not-submitted", error: error.message };
+    return { outcome: "unknown", error: "Network lost or timed out; do not repeat the key" };
+  }
 }
 
 export class ReplyRequestError extends Error {

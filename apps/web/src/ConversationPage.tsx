@@ -3,7 +3,7 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { mapTaskStatuses, mergeTranscripts, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type PersonaView, type SnapshotResponse, type Task } from "@homeling/contracts";
+import { mapTaskStatuses, mergeTranscripts, paneControlIdentity, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type PersonaView, type SnapshotResponse, type Task } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
 import { Link, Navigate, useParams } from "react-router";
 import { approvePendingRequest, fetchLaunchers, fetchPaneHistory, fetchPendingRequests, fetchPersonas, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply, sendPersonaMessage } from "./api.ts";
@@ -14,7 +14,9 @@ import { ConversationMessage } from "./ConversationMessage.tsx";
 import { historyReducer, initialHistoryState, optimisticEntries, reconcileOutgoing, type HistoryAction, type OutgoingMessage } from "./history-reducer.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 import { ReplyComposer } from "./ReplyComposer.tsx";
+import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { TaskChip } from "./TaskChip.tsx";
+import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
@@ -26,6 +28,7 @@ type HistoryPageKind = Extract<HistoryAction, { type: "received" }>["pageKind"];
 interface PaneConversationProps {
   paneId: string;
   personaId?: string;
+  persona?: PersonaView;
 }
 
 function failureLabel(message: OutgoingMessage): string {
@@ -34,7 +37,7 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId, persona }: PaneConversationProps): ReactElement {
   const lockSession = useSessionSnapshot();
   const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
@@ -46,6 +49,9 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   const [error, setError] = useState<string | null>(null);
   const [launchers, setLaunchers] = useState<readonly Launcher[]>([]);
   const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
+  const [snapshotHealthy, setSnapshotHealthy] = useState(false);
+  const [controlBlocked, setControlBlocked] = useState(false);
+  const controlBlockedRef = useRef(false);
   const [tasks, setTasks] = useState<Task[]>(() => readConversationTasks(taskStorageKey));
   const [launchOpen, setLaunchOpen] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState("");
@@ -155,8 +161,12 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
     const session = startAbortableSerialPolling(async (signal) => {
       try {
         const next = await fetchSnapshot(signal);
-        if (!signal.aborted) setSnapshot((current) => current && current.ts > next.ts ? current : next);
+        if (!signal.aborted) {
+          setSnapshot((current) => current && current.ts > next.ts ? current : next);
+          setSnapshotHealthy(next.bridge === "connected");
+        }
       } catch {
+        if (!signal.aborted) setSnapshotHealthy(false);
         // Keep the last snapshot so an intermittent read does not erase task status.
       }
     }, 3000);
@@ -169,6 +179,11 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   useEffect(() => {
     saveConversationTasks(taskStorageKey, tasks);
   }, [taskStorageKey, tasks]);
+
+  const controlPane = snapshotHealthy && snapshot?.bridge === "connected"
+    ? [...snapshot.agents, ...snapshot.shellPanes].find((pane) => pane.paneId === paneId && ["idle", "working"].includes(pane.status))
+    : undefined;
+  const controlIdentity = controlPane ? paneControlIdentity(controlPane) : null;
 
   const visibleTasks = useMemo(
     () => snapshot ? mapTaskStatuses(tasks, snapshot) : tasks,
@@ -257,7 +272,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   }
 
   function sendMessage(text: string, existing?: OutgoingMessage): void {
-    if (sendBlockedRef.current && !existing) return;
+    if (controlBlockedRef.current || (sendBlockedRef.current && !existing)) return;
     if (existing && queuedMessageIds.current.has(existing.id)) return;
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
@@ -326,7 +341,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
   }
 
   function submitDraft(): void {
-    if (sendBlockedRef.current || !draft.trim()) return;
+    if (controlBlockedRef.current || sendBlockedRef.current || !draft.trim()) return;
     const text = draft;
     setDraft("");
     sendMessage(text);
@@ -357,8 +372,8 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
     <AssistantRuntimeProvider runtime={runtime}>
       <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-4">
         <header className="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-800 bg-[#1a1a1a]/95 px-4 py-3 backdrop-blur">
-          <Link to="/" className="text-sm text-green-300 hover:text-green-200">← panes</Link>
-          <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>
+          <Link to="/" className="inline-block min-h-11 py-2 text-sm text-green-300 hover:text-green-200">Back to Homelings</Link>
+          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={`Details for ${persona.name}`}><PersonaAvatar avatar={persona.avatar} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">Details</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
           <p className="text-xs text-neutral-400" role="status">
             {error ?? (history.available === false ? "history unavailable" : "history polling · 2s")}
           </p>
@@ -457,7 +472,13 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
               ))}
             </section>
           ) : null}
-          <ReplyComposer draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked} />
+          <SpecialKeyBar
+            paneId={paneId}
+            identity={controlIdentity}
+            disabled={sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
+            onBlockedChange={(blocked) => { controlBlockedRef.current = blocked; setControlBlocked(blocked); }}
+          />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>
@@ -503,7 +524,7 @@ export function ConversationPage(): ReactElement {
     }
     return <>
       {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
-      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} />
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} />
     </>;
   }
 

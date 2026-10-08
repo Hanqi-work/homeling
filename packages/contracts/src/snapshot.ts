@@ -64,6 +64,12 @@ export interface SessionSummary {
   host?: string;
 }
 
+/** Best available snapshot identity; not an atomic session lease or TUI consumption proof. */
+export function paneControlIdentity(pane: PaneWire): string {
+  return JSON.stringify([pane.paneId, pane.workspaceId, pane.tabId, pane.agent, pane.cwd,
+    pane.sessionName ?? null, pane.host ?? null, pane.session ?? null]);
+}
+
 /** GET /api/snapshot. Unknown additive keys are ignored by consumers. */
 export interface SnapshotResponse {
   bridge: BridgeStatus;
