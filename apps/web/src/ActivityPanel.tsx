@@ -1,6 +1,7 @@
-import type { ActivityEvent, ActivityResponse } from "@homeling/contracts";
+import type { ActivityEvent, ActivityResponse, TaskOccurrence } from "@homeling/contracts";
 import { useEffect, useState, type ReactElement } from "react";
 import { Link } from "react-router";
+import { fetchActivity } from "./api.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 
 const labels: Record<ActivityEvent["kind"], string> = {
@@ -13,12 +14,18 @@ const labels: Record<ActivityEvent["kind"], string> = {
 
 export function ActivityTimeline({ activity, personaId }: { activity: ActivityResponse; personaId: string }): ReactElement {
   const events = activity.events.filter((event) => event.personaId === personaId);
+  const tasks = new Map<string, TaskOccurrence>();
+  for (const occurrence of activity.occurrences) {
+    if (occurrence.personaId === personaId && !tasks.has(occurrence.occurrenceKey)) {
+      tasks.set(occurrence.occurrenceKey, occurrence);
+    }
+  }
   return <section className="mx-auto max-w-2xl space-y-5 p-5">
     <h1 className="text-2xl font-semibold">Activity</h1>
     {activity.observation !== "live" && <p className="rounded-xl border border-amber-700/50 bg-amber-950/30 p-3 text-sm text-amber-100">Observation gap · activity during downtime is unknown. Historical outcomes are not reconstructed from snapshots.</p>}
     {events.length === 0 ? <p className="text-sm text-zinc-400">No recorded activity yet.</p> : <ol className="space-y-3" role="list">
       {[...events].reverse().map((event) => {
-        const task = activity.occurrences.find((item) => item.occurrenceKey === event.occurrenceKey && item.personaId === personaId);
+        const task = tasks.get(event.occurrenceKey);
         return <li key={event.id}>
           <Link to={`/t/${encodeURIComponent(event.paneId)}?occurrence=${encodeURIComponent(event.occurrenceKey)}`}
             state={{ returnTo: `/persona/${encodeURIComponent(personaId)}/activity` }}
@@ -40,9 +47,7 @@ export function ActivityPanel({ personaId }: { personaId: string }): ReactElemen
     setState({ personaId });
     const polling = startAbortableSerialPolling(async (signal) => {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL || "/lite/"}api/persona/${encodeURIComponent(personaId)}/activity`, { signal, headers: { accept: "application/json" } });
-        if (!response.ok) throw new Error(`Activity unavailable (${response.status})`);
-        const data = await response.json() as ActivityResponse;
+        const data = await fetchActivity(personaId, signal);
         if (!signal.aborted) setState({ personaId, data });
       } catch (error) {
         if (!signal.aborted) setState((previous) => ({ personaId, ...(previous.personaId === personaId ? { data: previous.data } : {}), error: error instanceof Error ? error.message : "Activity unavailable" }));

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { PendingRequest, PersonaView } from "@homeling/contracts";
-import { fetchActivityTask, fetchPendingRequests, fetchPersonas, fetchPersonaActivity } from "./api.ts";
+import { fetchTaskOccurrence, fetchPendingRequests, fetchPersonas, fetchActivity } from "./api.ts";
 import { startAbortableSerialPolling } from "./polling.ts";
 import { useSessionSnapshot } from "./SessionBoundary.tsx";
 
@@ -37,13 +37,15 @@ export function HomeTriage({ suspended = false, pollIntervalMs = 2000 }: { suspe
           const taskOwners = registry.personas.filter((persona) => requests.some((request) => request.status === "pending" && request.personaId === persona.id && request.paneId !== persona.mainPaneId));
           await Promise.all(taskOwners.map(async (persona) => {
             try {
-              const activity = await fetchPersonaActivity(persona.id, signal);
-              if (activity.observation !== "live") return;
+              const activity = await fetchActivity(persona.id, signal);
+              if (signal.aborted || activity.observation !== "live") return;
               for (const request of requests) {
+                if (signal.aborted) return;
                 if (request.personaId !== persona.id || request.status !== "pending") continue;
                 const occurrence = [...activity.occurrences].reverse().find((item) => item.paneId === request.paneId);
                 if (occurrence?.status !== "active" || occurrence.personaId !== persona.id || occurrence.spaceId !== persona.spaceId) continue;
-                const task = await fetchActivityTask(occurrence.occurrenceKey, signal);
+                const task = await fetchTaskOccurrence(occurrence.occurrenceKey, signal);
+                if (signal.aborted) return;
                 if (task.current && task.liveAvailable && task.observation === "live" && task.occurrence.occurrenceKey === occurrence.occurrenceKey && task.occurrence.paneId === request.paneId && task.occurrence.personaId === persona.id && task.occurrence.spaceId === persona.spaceId && task.occurrence.status === "active") {
                   taskLinks.set(request.id, `/p/${encodeURIComponent(request.paneId)}?occurrence=${encodeURIComponent(occurrence.occurrenceKey)}`);
                 }

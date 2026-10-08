@@ -2,6 +2,7 @@ import { SessionLocked, lockedResponse, type MutationAdmission } from "./session
 import type { SystemAdmission } from "./system-admission.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 import type { ActivityLedger } from "./activity-ledger.ts";
+import { dispatchTaskCreation } from "./mutation-result.ts";
 import type { DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText } from "./control-key.ts";
 import { HerdrRpcError, type HerdrCreatedSpace, type HerdrPane, type HerdrPort, type HerdrSnapshot } from "./herdr-client.ts";
@@ -11,6 +12,7 @@ import { newPersonaId, PersonaRegistry, type Persona, type PersonaAvatar } from 
 export interface PersonaRuntime {
   readonly registry: PersonaRegistry;
   readonly activity?: ActivityLedger;
+  observeTask?: (paneId: string) => Promise<void>;
   readonly herdr: HerdrPort;
   readonly cfg: DaemonConfig;
   readonly fetcher: BridgeFetch;
@@ -296,10 +298,27 @@ export function launchPersonaTask(
   const launcher = launchers.launchers.find((row) => row.command === command);
   if (!launcher) return Response.json({ ok: false, error: "Launcher is not allowlisted", code: "launch.not_allowlisted" }, { status: 400 });
   let tabPane: HerdrPane | undefined;
+  let occurrenceKey: string | undefined;
   try {
-    tabPane = await admission.dispatch(() => runtime.herdr.createTab(persona.spaceId, launcher.cwd));
+    tabPane = await dispatchTaskCreation(admission, () => runtime.herdr.createTab(persona.spaceId, launcher.cwd), async (pane, result) => {
+      tabPane = pane;
+      if (pane.workspace_id !== persona.spaceId) throw new HerdrRpcError("herdr.protocol", "Created task pane does not belong to the requested persona space");
+      if (runtime.activity) {
+        const occurrence = await runtime.activity.register({ personaId, spaceId: pane.workspace_id, paneId: pane.pane_id, title: launcher.label || launcher.command }, result);
+        occurrenceKey = occurrence.occurrenceKey;
+      }
+    });
+    if (runtime.activity) {
+      if (!runtime.observeTask) throw new Error("Activity observer is unavailable; task was not started");
+      await runtime.observeTask(tabPane.pane_id);
+    }
     await startLauncher(runtime, launcher, tabPane.pane_id, admission);
   } catch (error) {
+    const unknown = error instanceof SessionLocked || error instanceof HerdrRpcError && ["herdr.timeout", "herdr.unavailable", "herdr.protocol", "herdr.agent_start_timeout"].includes(error.code);
+    if (occurrenceKey && !unknown) {
+      try { await runtime.activity!.fail(occurrenceKey, `Task launch failed: ${error instanceof Error ? error.message : String(error)}`, admission); }
+      catch (registrationError) { console.error("[homeling-daemon] could not register task launch failure", registrationError); }
+    }
     let paneStillOpen = false;
     if (tabPane) {
       try { await runtime.herdr.closePane(tabPane.pane_id); }
@@ -311,7 +330,8 @@ export function launchPersonaTask(
       createdAt: new Date().toISOString(),
       reason: `task launch failed: ${error instanceof Error ? error.message : String(error)}`,
     });
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: error instanceof HerdrRpcError ? error.code : "launch.failed" }, { status: 502 });
+    if (error instanceof SessionLocked) throw error;
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: error instanceof HerdrRpcError ? error.code : "launch.failed", ...(unknown ? { deliveryUnknown: true } : {}) }, { status: 502 });
   }
   const snapshot = await runtime.herdr.snapshot().catch(() => null);
   const workspaceLabel = snapshot?.workspaces.find((space) => space.workspace_id === persona.spaceId)?.label ?? persona.name;

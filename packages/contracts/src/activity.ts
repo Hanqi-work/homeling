@@ -25,6 +25,14 @@ export interface ActivityEvent {
   readonly detail?: string;
 }
 
+export interface ActivityTaskResponse {
+  readonly occurrence: TaskOccurrence;
+  readonly current: boolean;
+  readonly observation: ActivityResponse["observation"];
+  /** False when the upstream cannot bind a live transcript/control target to this occurrence. */
+  readonly liveAvailable: boolean;
+}
+
 export interface ActivityResponse {
   readonly events: readonly ActivityEvent[];
   readonly occurrences: readonly TaskOccurrence[];

@@ -8,9 +8,40 @@ import { handleRequest } from "./index.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
 import type { PersonaRuntime } from "./persona-service.ts";
 import { SessionLock } from "./session-lock.ts";
+import { createDaemonSystemAdmissions } from "./system-admission.ts";
+import { handleUnlockedRequest } from "./session-test-fixture.ts";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+
+test("scoped history rechecks the real occurrence after upstream body arrival and stale controls never dispatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "homeling-scoped-activity-")); roots.push(root);
+  const cfg = { ...daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: join(root, "registry.json") }), trustedUsers: ["me"], tailscaleHost: "home.tail.test" };
+  const activity = new ActivityLedger(join(root, "activity.json"));
+  const session = new SessionLock(); const { token } = session.unlock("test");
+  const user = session.admission(session.admit(token, "test"));
+  const observer = createDaemonSystemAdmissions().activityObserve;
+  const occurrence = await activity.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Old build" }, user);
+  activity.live(observer);
+  const begun = Promise.withResolvers<void>(); const delayed = Promise.withResolvers<Response>();
+  let writes = 0;
+  const fetcher = async (_input: string | URL | Request, init?: RequestInit) => { if (init?.method === "POST") { writes++; return Response.json({ ok: true }); } begun.resolve(); return delayed.promise; };
+  const unavailable = (): never => { throw new Error("Herdr must not be used by scoped proxy"); };
+  const runtime: PersonaRuntime = { cfg, registry: new PersonaRegistry(cfg.registryPath), activity, fetcher, herdr: { createSpace: unavailable, createTab: unavailable, readPane: unavailable, sendText: unavailable, sendKeys: unavailable, closePane: unavailable, renameSpace: unavailable, snapshot: unavailable, subscribe: unavailable } };
+  const req = (action: string, method = "GET") => Object.assign(new Request(`https://home.tail.test/lite/api/activity/task/${occurrence.occurrenceKey}/${action}`, { method, headers: { host: "home.tail.test", origin: "https://home.tail.test", "tailscale-user-login": "me", "content-type": "application/json" }, ...(method === "POST" ? { body: JSON.stringify({ text: "Old instruction", submit: true }) } : {}) }), { remoteAddress: "127.0.0.1" });
+  const reading = handleRequest(req("history"), cfg, fetcher, runtime);
+  await begun.promise;
+  await activity.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "working" }, observer);
+  await activity.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "done" }, observer);
+  await activity.observe("pane_agent_status_changed", { pane_id: "p", workspace_id: "s", agent_status: "working" }, observer);
+  delayed.resolve(Response.json({ entries: [{ text: "NEWER TASK SECRET" }] }));
+  const rejected = await reading;
+  expect(rejected.status).toBe(409);
+  expect(await rejected.text()).not.toContain("NEWER TASK SECRET");
+  const write = await handleUnlockedRequest(req("reply", "POST"), cfg, fetcher, runtime);
+  expect(write.status).toBe(409);
+  expect(writes).toBe(0);
+});
 
 test("authenticated Activity API reads durable history without triggering Herdr or recovery writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "homeling-activity-api-")); roots.push(root);

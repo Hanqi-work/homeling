@@ -1,10 +1,12 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { AppRoot } from "./AppRoot.tsx";
 import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
+
+const ActivityPanel = lazy(() => import("./ActivityPanel.tsx").then((module) => ({ default: module.ActivityPanel })));
 
 registerServiceWorker((handle) => {
   console.info("[homeling] new version available — call applyUpdate() to refresh");
@@ -13,5 +15,8 @@ registerServiceWorker((handle) => {
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 createRoot(root).render(
-  <StrictMode><BrowserRouter basename="/lite"><AppRoot slots={{ homeSummary: <SessionAwareHomeTriage /> }} /></BrowserRouter></StrictMode>,
+  <StrictMode><BrowserRouter basename="/lite"><AppRoot slots={{
+    homeSummary: <SessionAwareHomeTriage />,
+    activity: (personaId) => <Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading activity…</main>}><ActivityPanel personaId={personaId} /></Suspense>,
+  }} /></BrowserRouter></StrictMode>,
 );

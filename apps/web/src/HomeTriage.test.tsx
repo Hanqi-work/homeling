@@ -7,6 +7,16 @@ import type { Root } from "react-dom/client";
 import { HomeTriage, SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { AppRoot } from "./AppRoot.tsx";
 import { sessionState } from "./session-state.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ActivityLedger } from "../../daemon/src/activity-ledger.ts";
+import { daemonConfigFromEnv } from "../../daemon/src/config.ts";
+import { handleRequest } from "../../daemon/src/index.ts";
+import { PersonaRegistry } from "../../daemon/src/persona-registry.ts";
+import type { PersonaRuntime } from "../../daemon/src/persona-service.ts";
+import { SessionLock } from "../../daemon/src/session-lock.ts";
+import { createDaemonSystemAdmissions } from "../../daemon/src/system-admission.ts";
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -132,12 +142,14 @@ test("hidden pages stop GETs; resumed generations discard old responses even if 
   expect(container.querySelector("section")).toBeNull();
 });
 
-test("late task ownership response from a hidden generation cannot restore an already cleared request", async () => {
+test("late task ownership response from a hidden generation cannot restore requests or start new task GETs", async () => {
   let reads = 0;
+  let taskReads = 0;
   let finishOld!: (response: Response) => void;
   globalThis.fetch = (async (url: RequestInfo | URL) => {
     if (String(url).endsWith("persona/list")) return Response.json({ personas: [mira] });
     if (String(url).endsWith("/activity")) return new Promise<Response>((resolve) => { finishOld = resolve; });
+    if (String(url).includes("/activity/task/")) { taskReads++; return Response.json(taskLookup("task")); }
     reads++;
     return Response.json(reads === 1 ? [request("old", "mira", "task")] : []);
   }) as unknown as typeof fetch;
@@ -148,6 +160,26 @@ test("late task ownership response from a hidden generation cannot restore an al
   expect(reads).toBe(2);
   await act(async () => finishOld(Response.json(activity("task"))));
   expect(container.querySelector("section")).toBeNull();
+  expect(taskReads).toBe(0);
+});
+
+test("locking during the first task lookup prevents later lookups even when transport ignores abort", async () => {
+  const taskReads: string[] = [];
+  let finish!: (response: Response) => void;
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const path = String(url);
+    if (path.endsWith("persona/list")) return Response.json({ personas: [mira] });
+    if (path.endsWith("requests")) return Response.json([request("first", "mira", "task1"), request("second", "mira", "task2")]);
+    if (path.endsWith("/activity")) return Response.json({ ...activity("task1"), occurrences: [...activity("task1").occurrences, { ...activity("task2").occurrences[0], occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002" }] });
+    taskReads.push(path);
+    return new Promise<Response>((resolve) => { finish = resolve; });
+  }) as unknown as typeof fetch;
+  await mount();
+  expect(taskReads).toHaveLength(1);
+  await act(async () => root.render(<MemoryRouter><HomeTriage suspended /></MemoryRouter>));
+  await act(async () => finish(Response.json(taskLookup("task1"))));
+  expect(taskReads).toHaveLength(1);
+  expect(container.textContent).toBe("");
 });
 
 test("locked suspension performs no reads, hides prior summary, and invalidates in-flight reads", async () => {
@@ -214,6 +246,88 @@ test("production AppRoot really suspends triage on server lock and until read-on
   expect(pendingReads).toBe(2);
 });
 
+async function settleUntil(check: () => boolean) {
+  for (let attempt = 0; attempt < 100 && !check(); attempt++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+  }
+  expect(check()).toBe(true);
+}
+
+test("triage consumes real daemon ledger ownership and scoped history, and the same link becomes read-only after a new work cycle", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "homeling-triage-api-"));
+  try {
+    const cfg = daemonConfigFromEnv({ HOMELING_REGISTRY_PATH: join(directory, "registry.json") });
+    const ledger = new ActivityLedger(join(directory, "activity.json"));
+    const lock = new SessionLock(); const { token } = lock.unlock("test");
+    const user = lock.admission(lock.admit(token, "test"));
+    const observer = createDaemonSystemAdmissions().activityObserve;
+    const occurrence = await ledger.register({ personaId: mira.id, spaceId: mira.spaceId, paneId: "owned-task", title: "Build" }, user);
+    ledger.live(observer);
+    const upstreamCalls: string[] = [];
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.method ?? "GET").toBe("GET");
+      upstreamCalls.push(String(input));
+      return Response.json({ paneId: "owned-task", available: true, entries: [], hasMore: false, fileTruncated: false, total: 0 });
+    };
+    const unavailable = (): never => { throw new Error("No real Herdr access"); };
+    const runtime: PersonaRuntime = { cfg, registry: new PersonaRegistry(cfg.registryPath), activity: ledger, fetcher, herdr: { createSpace: unavailable, createTab: unavailable, readPane: unavailable, sendText: unavailable, sendKeys: unavailable, closePane: unavailable, renameSpace: unavailable, snapshot: unavailable, subscribe: unavailable } };
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input); calls.push(path);
+      if (path.endsWith("persona/list")) return Response.json({ personas: [mira] });
+      if (path.endsWith("requests")) return Response.json([{ ...request("approval", "mira", "owned-task"), payload: { question: "Owned task permission", options: [{ id: "yes", label: "Allow owned task" }] } }]);
+      if (path.endsWith("snapshot")) return Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] });
+      if (path.endsWith("launchers")) return Response.json({ launchers: [] });
+      const req = Object.assign(new Request(new URL(path, "http://localhost:8790"), { ...init, headers: { host: "localhost:8790" } }), { remoteAddress: "127.0.0.1" });
+      return handleRequest(req, cfg, fetcher, runtime);
+    }) as unknown as typeof fetch;
+    sessionState.apply({ locked: false, epoch: 2, generation: "boot" }); sessionState.caughtUp();
+    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+    const routes = <Routes><Route path="/" element={<HomeTriage />} /><Route path="/p/:paneId" element={<ConversationPage />} /></Routes>;
+    await act(async () => root.render(<MemoryRouter>{routes}</MemoryRouter>));
+    await settleUntil(() => container.querySelector("a") !== null);
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe(`/p/owned-task?occurrence=${occurrence.occurrenceKey}`);
+    await act(async () => link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }) as unknown as Event));
+    await settleUntil(() => container.textContent?.includes("Owned task permission") === true);
+    expect(container.textContent).toContain("Owned task permission");
+    expect(calls).toContain(`/lite/api/activity/task/${occurrence.occurrenceKey}/history`);
+    expect(calls.some((path) => path.includes("/pane/"))).toBe(false);
+    expect(upstreamCalls.some((path) => path.endsWith("/api/pane/owned-task/history"))).toBe(true);
+    await ledger.observe("pane_agent_status_changed", { pane_id: "owned-task", workspace_id: mira.spaceId, agent_status: "working" }, observer);
+    await ledger.observe("pane_agent_status_changed", { pane_id: "owned-task", workspace_id: mira.spaceId, agent_status: "done" }, observer);
+    await ledger.observe("pane_agent_status_changed", { pane_id: "owned-task", workspace_id: mira.spaceId, agent_status: "working" }, observer);
+    calls.length = 0; upstreamCalls.length = 0;
+    await act(async () => root.render(<MemoryRouter key="stale" initialEntries={[`/p/owned-task?occurrence=${occurrence.occurrenceKey}`]}>{routes}</MemoryRouter>));
+    expect(container.querySelector("textarea") !== null).toBe(false);
+    expect(container.textContent).not.toContain("Owned task permission");
+    expect(calls.some((path) => path.endsWith("requests") || path.endsWith("/history"))).toBe(false);
+    expect(upstreamCalls).toHaveLength(0);
+  } finally {
+    await act(() => root?.unmount());
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["historical", "wrong-pane", "unknown"])("actual task approval route %s cannot expose newer-pane history, approvals or composer", async (scenario) => {
+  sessionState.apply({ locked: false, epoch: 2, generation: "boot" }); sessionState.caughtUp();
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const path = String(url); calls.push(path);
+    if (path.includes("/activity/task/")) return scenario === "unknown" ? Response.json({ error: "not found" }, { status: 404 })
+      : Response.json({ ...taskLookup("task"), current: scenario !== "historical", occurrence: { ...taskLookup("task").occurrence, paneId: scenario === "wrong-pane" ? "another-pane" : "task" } });
+    if (path.endsWith("requests")) return Response.json([{ ...request("new-task-request", "mira", "task"), payload: { question: "NEW TASK PERMISSION", options: [{ id: "yes", label: "Allow new task" }] } }]);
+    if (path.endsWith("snapshot")) return Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] });
+    if (path.endsWith("launchers")) return Response.json({ launchers: [] });
+    return Response.json({ paneId: "task", available: false, reason: "no-log" });
+  }) as unknown as typeof fetch;
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root.render(<MemoryRouter initialEntries={["/p/task?occurrence=3f0ec6a3-14db-40e5-a222-cade2e7f8001"]}><Routes><Route path="/p/:paneId" element={<ConversationPage />} /></Routes></MemoryRouter>));
+  expect(container.querySelector("textarea") !== null).toBe(false);
+  expect(container.textContent).not.toContain("NEW TASK PERMISSION");
+  expect(calls.some((path) => path.includes("/pane/") || path.endsWith("requests"))).toBe(false);
+});
+
 for (const kind of ["task", "main"] as const) {
   test(`summary ${kind} link reaches the actual pane approval card, main identity follows rebuilt registry pane`, async () => {
     sessionState.apply({ locked: false, epoch: 2, generation: "boot" }); sessionState.caughtUp();
@@ -235,6 +349,6 @@ for (const kind of ["task", "main"] as const) {
     await act(async () => link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }) as unknown as Event));
     expect(container.textContent).toContain("Target permission");
     expect(container.textContent).not.toContain("Approve build?");
-    expect(paths.some((path) => path.endsWith(`pane/${encodeURIComponent(target)}/history`))).toBe(true);
+    expect(paths.some((path) => path.endsWith(kind === "task" ? "activity/task/3f0ec6a3-14db-40e5-a222-cade2e7f8001/history" : `pane/${encodeURIComponent(target)}/history`))).toBe(true);
   });
 }
