@@ -37,7 +37,8 @@ export function initializeUnlockCredentials(directory: string): void {
   exclusiveWrite(join(directory, "unlock-verifier.json"), `${JSON.stringify({ version: 1, verifier: digest(secret).toString("hex") })}\n`);
 }
 /** Never reads the plaintext secret. Any unsafe, missing or corrupt state remains unavailable. */
-export function loadUnlockVerifier(directory: string): ((secret: string) => boolean) | null {
+export type UnlockVerifier = ((secret: string) => boolean) & { readonly fingerprint?: string };
+export function loadUnlockVerifier(directory: string): UnlockVerifier | null {
   try {
     safeDirectory(directory);
     // Check the plaintext file's metadata, not its contents; missing/unsafe local state is unavailable.
@@ -46,6 +47,6 @@ export function loadUnlockVerifier(directory: string): ((secret: string) => bool
     const state = JSON.parse(readPrivate(join(directory, "unlock-verifier.json"))) as { version?: unknown; verifier?: unknown };
     if (state.version !== 1 || typeof state.verifier !== "string" || !/^[a-f0-9]{64}$/.test(state.verifier)) return null;
     const expected = Buffer.from(state.verifier, "hex");
-    return (secret: string) => /^[A-Za-z0-9_-]{43}$/.test(secret) && timingSafeEqual(digest(secret), expected);
+    return Object.assign((secret: string) => /^[A-Za-z0-9_-]{43}$/.test(secret) && timingSafeEqual(digest(secret), expected), { fingerprint: state.verifier });
   } catch { return null; }
 }

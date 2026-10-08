@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactElement } from "react";
-import { getPersonaMemory, putPersonaMemory, MemoryRequestError, type MemoryFetcher, type MemoryKind, type PersonaMemory } from "./persona-memory-api.ts";
+import { getPersonaMemory, putPersonaMemory, MemoryRequestError, memoryFetch, type MemoryFetcher, type MemoryKind, type PersonaMemory } from "./persona-memory-api.ts";
 
 export interface PersonaMemoryEditorProps { personaId: string; fetcher?: MemoryFetcher }
 const kinds: MemoryKind[] = ["facts", "preferences", "project"];
@@ -25,7 +25,7 @@ export function PersonaMemoryEditor(props: PersonaMemoryEditorProps): ReactEleme
   return <MemoryEditor key={props.personaId} {...props} />;
 }
 
-function MemoryEditor({ personaId, fetcher = fetch }: PersonaMemoryEditorProps): ReactElement {
+function MemoryEditor({ personaId, fetcher = memoryFetch }: PersonaMemoryEditorProps): ReactElement {
   const id = useId();
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;

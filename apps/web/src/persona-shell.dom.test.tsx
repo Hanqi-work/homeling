@@ -1,10 +1,12 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router";
 import type { Root } from "react-dom/client";
 import { App } from "./App.tsx";
 import type { PersonaShellSlots } from "./shell-slots.ts";
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "persona-shell-fixture" }); sessionState.caughtUp(); });
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -20,7 +22,7 @@ beforeAll(async () => {
   }
   ({ createRoot } = await import("react-dom/client"));
 });
-afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; });
+afterEach(async () => { await act(() => root?.unmount()); container?.remove(); globalThis.fetch = originalFetch; sessionState.lock(); });
 afterAll(() => {
   for (const [key, descriptor] of saved) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
