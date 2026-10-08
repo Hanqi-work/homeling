@@ -2,13 +2,13 @@
 
 住在自己电脑上的 AI 伙伴，手机上对话、派任务、审批、查看结果。目标是 Dots / Grok Bot / Muse 式的 persona agent；基于已有 herdr / Collie，**不是 Collie fork，也不替换旧 UI**。
 
-**当前是开发中的 v1，不是正式发布。** 已接线的能力包括 pane 对话流（markdown/工具 trace）、显式发送与 history 送达确认、快捷回复、权限/选项卡片、allowlist 派任务、任务详情/只读终端镜像/中断、PWA 基础。persona、记忆、Activity、STT、特殊键、push、triage、头像/动效、idle-lock 和多语言由后续票增量补齐；本 README 随合入更新。已提供独立 VAPID / 订阅存储 / Web Push adapter、具体审批摘要、可信 Activity 完成/失败通知及 `/lite/` 深链接；PWA 真机安装与锁屏通知仍须人工验收。debounce / coalesce 属于后续可靠性票，不在最小链中宣称完成。
+**当前是开发中的 v1，不是正式发布。** 已接线 persona 创建与导航、持久 Markdown 记忆/编辑、头像与真实状态动效、Activity、对话/送达确认、权限卡片、派任务/详情、STT、特殊键、PWA，以及独立 VAPID / 订阅存储 / Web Push 发送、具体审批摘要和可信完成/失败通知。用户业务已消费 #19 自持服务端写锁与显式解锁入口；未配置本机解锁凭据时 fail-closed。triage、多语言全量与通知 debounce / coalesce 仍由对应后续票收口；不把这些当作 #15 已完成。真机安装、锁屏通知和双通道并存仍须人工验收。
 
 正式发布门禁：完成 [PRD §9](PRD.md#9-v1-功能清单验收基线) 全部必选能力，并通过对应设备验收。README / LICENSE 就位不等于 v1 已发布。
 
 ## 架构
 
-Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。目标实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；尚未交付的 registry / memory / push 不应当作当前 API。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
+Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，尚未交付的 push 不应当作当前 API。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
 
 ```text
 手机（tailnet） → Tailscale Serve HTTPS :443
@@ -77,6 +77,7 @@ curl -fsS http://127.0.0.1:8790/lite/api/health
 | `HOMELING_ALLOW_ANY_HOST` | 关闭；不要在部署时打开 | 否 |
 | `HOMELING_PUSH_SUBJECT` | 独立 VAPID 联系地址，如 `mailto:you@example.com`；未设则关闭 Homeling push | 否，需明确配置 daemon/plist |
 | `HOMELING_PUSH_DIR` | `~/Library/Application Support/Homeling/push`；独立 VAPID / 订阅 / 去重 / cursor，目录 0700、文件 0600 | 否，需明确配置 daemon/plist |
+| `HOMELING_MEMORY_DIR` | `~/Library/Application Support/Homeling/memory`（或 `HOMELING_DATA_DIR/memory`），persona Markdown 与冻结会话文件；须为绝对路径、无 symlink、owner-only | 否，仅 daemon 环境支持 |
 
 推荐保持默认端口/产物/bridge 地址。非默认 `WEB_DIST` / `BRIDGE_ORIGIN` 需自行在 plist 中明确配置并重新加载，单纯 export 后运行安装脚本不生效。不要关闭 Host 检查来解决 403。
 
@@ -118,6 +119,15 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 人工验收：锁屏后让 **daemon 注册的 persona 主 pane / 持久归属 task** 出现真实审批，正文须含具体操作；点击应进入正确 persona 主聊或 task；重复轮询、daemon 重启不重复同一 occurrence；明确解决后同内容新请求、新的 task occurrence / registry 主 pane replacement 可再通知。任务完成/失败只消费 #13 持久可信 Activity，unknown / 断连不猜结果。上游未提供可验证的同 pane 进程 incarnation：断连期间的同 pane 重启保持保守 unknown，不保证识别成新实例，不使用 session 名或 history UUID 猜测。
 
 发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；页面可向 `/lite/` SW 发送 `HOMELING_RETRACT` 按 tag 尝试本机关闭，不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
+
+## Persona 记忆（#12）
+
+- 每个 persona 持久化 `facts.md`、`preferences.md`、`project.md`；纯 UTF-8 Markdown，单文件最多 24,000 字节。编辑器显式保存，使用 revision 防止不同页面互相覆盖；冲突须手动重新加载，锁拒绝保留草稿，不会解锁后自动重放。保存结果未知时先重新加载核对。
+- **只在下一次会话启动 / 首条消息时生效**。当前运行 pane 不会热吸收编辑内容；daemon 重启但仍使用同一个 pane 也不是新会话。不要为了生效直接结束正在执行的任务。
+- 支持明确的全新交互式 `pi` launcher（可含 `--model`、`--provider` 的简单参数）；daemon 在 Homeling 数据目录生成冻结的 `session-*.md`，追加官方 `--append-system-prompt '<绝对文件路径>'`。不改 pi 配置、项目 AGENTS 文件或 Collie 文件。launcher 必须先在既有 allowlist 中配置；Homeling 只扩展已选行的记忆启动参数，不接受任意新命令。
+- 其余 kind、复杂 shell wrapper 或 resume launcher 明示 **unsupported native injection**，将冻结记忆作为首条用户消息前缀降级；不是等价的 system prompt。精确注入全文仍用于 history 送达对账，不以 HTTP 成功宣称 agent 已消费。
+- 原始文档与冻结文件可能含个人信息，请勿放入仓库或日志；目录 0700、文件 0600。文件损坏/非法 UTF-8/symlink/过宽权限拒绝读写，不静默替换为空。遗留 `.write-lock` 不自动抢占；确认 daemon 全部停止且没有在途写操作后由本机操作者处理。冻结文件保留供仍运行的 pi 使用，只有确认对应会话退出后才可人工清理。
+- **人工遗留**：手机进入 persona 的 Memory，编辑并保存；在已配置的真实 pi 新会话询问记忆中的事实，确认可引用；再修改并证明旧 pane 不变、新会话读取新内容；其他 kind 检查降级提示。自动测试仅用 fake Herdr/bridge 和临时文件，未运行真实 pi、未操作 Collie/秘密/服务。
 
 ## 更新与卸载
 

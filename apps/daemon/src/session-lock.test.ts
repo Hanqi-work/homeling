@@ -8,6 +8,7 @@ describe("Homeling session mutation admission", () => {
     const b = lock.unlock("alice");
     const actor = lock.admit(a.token, "alice");
     lock.lock(a.token, "alice");
+    expect(lock.state(a.token, "alice").epoch).not.toBe(a.state.epoch);
     expect(() => lock.dispatch(actor, () => "write")).toThrow("session.locked");
     expect(lock.state(b.token, "alice").locked).toBe(false);
     const old = lock.admit(b.token, "alice");

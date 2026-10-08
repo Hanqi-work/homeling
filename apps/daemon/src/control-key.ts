@@ -1,5 +1,6 @@
 import { paneControlIdentity, type PaneWire, type SnapshotResponse } from "@homeling/contracts";
 import { proxyTargetUrl, type BridgeFetch } from "./bridge-proxy.ts";
+import { SessionLocked, lockedResponse } from "./session-lock.ts";
 import type { DaemonConfig } from "./config.ts";
 import { detectPendingRequest, type PendingRequestStore } from "./requests.ts";
 
@@ -79,7 +80,8 @@ export async function sendControlKey(req: Request, cfg: DaemonConfig, fetcher: B
     }
     state.unknown = true;
     return Response.json({ outcome: "unknown", error: "Key result unknown; inspect the terminal, do not repeat" }, { status: 502 });
-  } catch {
+  } catch (error) {
+    if (error instanceof SessionLocked) { state.unknown = false; return lockedResponse(); }
     state.unknown = writeStarted;
     return writeStarted
       ? Response.json({ outcome: "unknown", error: "Key result unknown; inspect the terminal, do not repeat" }, { status: 502 })

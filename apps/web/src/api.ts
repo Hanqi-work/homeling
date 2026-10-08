@@ -1,4 +1,4 @@
-import type { ActivityResponse, ActivityTaskResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
+import type { ActivityResponse, ActivityTaskResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 import { sessionState } from "./session-state.ts";
 
@@ -76,6 +76,37 @@ export async function createPersona(input: { name: string; avatar: { color: stri
   return result.persona;
 }
 
+export interface PersonaAppearancePatch {
+  readonly name: string;
+  readonly avatar: PersonaAvatar;
+}
+
+export class PersonaAppearanceError extends Error {
+  constructor(message: string, readonly notDispatched = false) {
+    super(message);
+    this.name = "PersonaAppearanceError";
+  }
+}
+
+export async function updatePersonaAppearance(personaId: string, patch: PersonaAppearancePatch): Promise<PersonaRecord> {
+  let response: Response;
+  try {
+    response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}`, {
+      method: "PATCH", headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ name: patch.name, avatar: patch.avatar }),
+    });
+  } catch (error) {
+    if (error instanceof ReplyRequestError && error.textDelivered === false) throw new PersonaAppearanceError(error.message, true);
+    throw new PersonaAppearanceError("Save outcome unknown. Check saved customization before retrying.");
+  }
+  const result = await response.json().catch(() => null) as { persona?: PersonaRecord; error?: string; executed?: boolean; deliveryUnknown?: boolean } | null;
+  if (!response.ok || result?.persona?.id !== personaId) {
+    const notDispatched = result?.executed !== true && result?.deliveryUnknown !== true && ([400, 401, 403, 404, 415].includes(response.status) || (response.status === 423 && result?.executed === false && result.deliveryUnknown === false));
+    throw new PersonaAppearanceError(result?.error ?? `Save could not be confirmed (${response.status}). Check saved customization.`, notDispatched);
+  }
+  return result.persona;
+}
+
 export interface PersonaDeleteResult {
   readonly deleted: boolean;
   readonly archived: boolean;
@@ -100,6 +131,16 @@ export async function deletePersona(personaId: string): Promise<PersonaDeleteRes
   return { deleted: result.deleted, archived: result.archived };
 }
 
+function replyDeliveryStatus(
+  result: { textDelivered?: boolean | null; deliveryUnknown?: boolean },
+  httpStatus: number,
+): boolean | null {
+  if (result.textDelivered === true) return true;
+  if (result.deliveryUnknown === true) return null;
+  if (typeof result.textDelivered === "boolean") return result.textDelivered;
+  return httpStatus < 500 ? false : null;
+}
+
 export async function sendPersonaMessage(personaId: string, text: string): Promise<string | undefined> {
   const response = await sessionMutationFetch(`${API_PREFIX}persona/${encodeURIComponent(personaId)}/message`, {
     method: "POST",
@@ -111,7 +152,7 @@ export async function sendPersonaMessage(personaId: string, text: string): Promi
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `message ${response.status}`,
-      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      replyDeliveryStatus(result, response.status),
       result.personaConfirmationText,
     );
   }
@@ -239,9 +280,11 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
         return { outcome: result.outcome, error: typeof result.error === "string" ? result.error : undefined };
       }
     }
+    if (value && typeof value === "object" && "executed" in value && value.executed === false) return { outcome: "not-submitted", error: "error" in value && typeof value.error === "string" ? value.error : `control key ${response.status}` };
     if (response.status === 423 && value && typeof value === "object") {
       return { outcome: (value as { deliveryUnknown?: boolean }).deliveryUnknown === true ? "unknown" : "not-submitted", error: "Unlock Homeling before controlling the pane" };
     }
+
     return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
   } catch (error) {
     if (error instanceof ReplyRequestError && error.textDelivered === false) return { outcome: "not-submitted", error: error.message };
@@ -276,7 +319,7 @@ export async function sendPaneReply(paneId: string, text: string, occurrenceKey?
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
       result.error ?? `reply ${response.status}`,
-      result.textDelivered === true ? true : result.deliveryUnknown === true ? null : typeof result.textDelivered === "boolean" ? result.textDelivered : response.status < 500 ? false : null,
+      replyDeliveryStatus(result, response.status),
     );
   }
 }

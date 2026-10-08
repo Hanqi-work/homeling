@@ -1,11 +1,11 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { sessionState } from './session-state.ts';
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import type { Root } from "react-dom/client";
 import { ActivityPanel } from "./ActivityPanel.tsx";
 import { TaskDetailPage } from "./TaskDetailPage.tsx";
+import { sessionState } from "./session-state.ts";
 
 const window = new Window();
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -20,7 +20,6 @@ beforeAll(async () => {
   }
   ({ createRoot } = await import("react-dom/client"));
 });
-beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: 'activity-fixture' }); sessionState.caughtUp(); });
 afterEach(async () => { if (root) await act(() => root!.unmount()); root = undefined; container?.remove(); globalThis.fetch = originalFetch; sessionState.lock(); });
 afterAll(() => { for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); } window.close(); });
 function mount() { container = document.createElement("div"); document.body.append(container); root = createRoot(container); return root; }
@@ -38,6 +37,8 @@ test("actual Activity task route refuses to fetch a reused pane's newer history"
 });
 
 test("a verified live task uses occurrence-scoped history rather than a raw pane history endpoint", async () => {
+  sessionState.apply({ locked: false, epoch: 1, generation: "activity-fixture" });
+  sessionState.caughtUp();
   const calls: string[] = [];
   Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (input: string) => {
     calls.push(String(input));

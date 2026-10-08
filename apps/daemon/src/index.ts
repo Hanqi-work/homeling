@@ -3,7 +3,7 @@
  * web build output plus the /lite/api/* routes, all behind the self-held access gate
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
-import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import { checkAccess, isLoopbackAddress, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import type { PaneWire } from '@homeling/contracts';
 import { dirname, join } from "node:path";
 import { ActivityLedger, TaskOccurrenceUnavailable } from "./activity-ledger.ts";
@@ -14,10 +14,11 @@ import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetc
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
 import { HerdrRpcError, HerdrSocketClient } from "./herdr-client.ts";
+import { handleMemoryRequest, isMemoryPath } from "./memory-routes.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
 import {
   createEventObserver, createPersona, deletePersona, launchPersonaTask, listPersonas, recoverPersonas,
-  sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
+  memoryStoreOf, sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
 } from "./persona-service.ts";
 
 import { createDaemonSystemAdmissions } from "./system-admission.ts";
@@ -26,7 +27,6 @@ import { SessionLocked, lockedResponse, type MutationAdmission } from "./session
 import { loadUnlockVerifier } from "./unlock-credentials.ts";
 import { handlePushRequest, type PushApiRuntime } from './push-api.ts';
 import { initializePushRuntime, type PushDaemonRuntime } from './push-runtime.ts';
-
 const pushRuntimes = new WeakMap<DaemonConfig, Promise<PushDaemonRuntime | null>>();
 
 const sessionControllers = new WeakMap<DaemonConfig, SessionController>();
@@ -38,10 +38,21 @@ function sessionController(cfg: DaemonConfig): SessionController {
   }
   return controller;
 }
+function trustedSessionTransport(req: Request & { remoteAddress?: string | null }, cfg: DaemonConfig): boolean {
+  if (cfg.sessionDevHttp) return isLoopbackRequest(req) && !req.headers.has("tailscale-user-login") &&
+    req.headers.get("host") === `localhost:${cfg.port}` && new URL(req.url).origin === `http://localhost:${cfg.port}`;
+  // Serve terminates HTTPS before the loopback HTTP hop. Only its fixed Host + trusted injected
+  // identity + socket peer constitute this front door; arbitrary forwarded-proto headers do not.
+  // Same-UID local processes can forge this tuple and are explicitly outside the lock boundary.
+  const host = req.headers.get("host")?.toLowerCase();
+  const expected = cfg.tailscaleHost.toLowerCase();
+  const login = req.headers.get("tailscale-user-login");
+  return !!expected && isLoopbackAddress(req.remoteAddress ?? null) &&
+    (host === expected || host === `${expected}:443`) && !!login && cfg.trustedUsers.includes(login);
+}
 function mutationOriginAllowed(req: Request & { remoteAddress?: string | null }, cfg: DaemonConfig): boolean {
-  if (!cfg.sessionDevHttp) return hasTailscaleOrigin(req, cfg);
-  if (!isLoopbackRequest(req) || req.headers.has("tailscale-user-login")) return false;
-  return req.headers.get("origin") === `http://localhost:${cfg.port}` && new URL(req.url).hostname === "localhost";
+  if (!trustedSessionTransport(req, cfg)) return false;
+  return cfg.sessionDevHttp ? req.headers.get("origin") === `http://localhost:${cfg.port}` : hasTailscaleOrigin(req, cfg);
 }
 
 export const API_HEALTH_PATH = "/lite/api/health";
@@ -138,6 +149,7 @@ export async function handleRequest(
 
   const { pathname } = new URL(req.url);
   const isMutation = req.method !== "GET" && req.method !== "HEAD";
+  if (pathname === "/lite/api/session" && !trustedSessionTransport(req, cfg)) return new Response("trusted HTTPS session front door required\n", { status: 403 });
   if (isMutation && !mutationOriginAllowed(req, cfg)) {
     return new Response("cross-origin rejected\n", { status: 403 });
   }
@@ -183,7 +195,7 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
-  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop)$/);
+  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop|control-key)$/);
   if (taskAction) {
     if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
     const action = taskAction[2]!;
@@ -203,10 +215,11 @@ export async function handleRequest(
         if (init?.method === "GET" || init?.method === "HEAD" || !init?.method) return upstreamFetch(input, init);
         return runtime.activity!.dispatchCurrent(key, admission!, (bound) => {
           if (bound.paneId !== occurrence.paneId) throw new TaskOccurrenceUnavailable();
+          if (action === "reply" && controlKeyBlocksText(cfg, bound.paneId)) return Response.json({ ok: false, executed: false, textDelivered: false, deliveryUnknown: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
           return upstreamFetch(input, init);
         }).catch((error) => { refused = error; throw error; });
       };
-      const response = await proxyBridgeRequest(forwarded, cfg, guardedFetch);
+      const response = action === "control-key" ? await sendControlKey(forwarded, cfg, guardedFetch, requestStore(cfg)) : await proxyBridgeRequest(forwarded, cfg, guardedFetch);
       if (refused instanceof SessionLocked) return sessionRefusal();
       if (refused instanceof TaskOccurrenceUnavailable) return stale();
       if (method === "POST") return response;
@@ -238,6 +251,9 @@ export async function handleRequest(
     } catch (error) {
       return Response.json({ error: error instanceof Error ? error.message : "Activity unavailable" }, { status: 502 });
     }
+  }
+  if (isMemoryPath(pathname)) {
+    return (await handleMemoryRequest(req, { registry: runtime.registry, memory: memoryStoreOf(runtime) }, admission))!;
   }
   if (pathname === `${API_PERSONA_PATH}/list` && req.method === "GET") {
     try {
@@ -359,7 +375,8 @@ export async function handleRequest(
         if (!taskKey) return await fetcher(target, init);
         return await runtime.activity!.dispatchCurrent(taskKey, admission!, task => {
           const targetUrl = new URL(String(target));
-          if (task.paneId !== record?.paneId || targetUrl.pathname !== `/api/pane/${encodeURIComponent(task.paneId)}/keys` || controlKeyBlocksText(cfg, task.paneId)) throw new TaskOccurrenceUnavailable();
+          const expectedUrl = new URL(proxyTargetUrl(`/lite/api/pane/${encodeURIComponent(task.paneId)}/keys`, cfg, 'POST'));
+          if (task.paneId !== record?.paneId || targetUrl.href !== expectedUrl.href || controlKeyBlocksText(cfg, task.paneId)) throw new TaskOccurrenceUnavailable();
           return upstreamFetch(target, init);
         });
       } catch (error) {
@@ -408,7 +425,8 @@ export async function handleRequest(
         return Response.json({ ok: false, textDelivered: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
       }
     }
-    return proxyBridgeRequest(req, cfg, fetcher);
+    try { return await proxyBridgeRequest(req, cfg, fetcher); }
+    catch (error) { if (error instanceof SessionLocked) return sessionRefusal(); throw error; }
   }
 
   const staticRes = await serveStatic(req, staticDirOf(cfg));

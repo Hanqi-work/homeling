@@ -1,4 +1,5 @@
 import { sessionMutationFetch } from './api.ts';
+import { sessionState } from './session-state.ts';
 
 export interface PushStatus { readonly publicKey: string; readonly preferences: { readonly enabled: boolean }; readonly subscriptions: readonly { readonly endpoint: string }[] }
 export async function pushApi<T>(action: string, body?: unknown): Promise<T> {
@@ -12,13 +13,17 @@ export function vapidBytes(publicKey: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(publicKey.replace(/-/g, '+').replace(/_/g, '/'));
   return Uint8Array.from(decoded, character => character.charCodeAt(0));
 }
-export async function enablePush(registration: ServiceWorkerRegistration, publicKey: string, enroll: (body: unknown) => Promise<unknown> = body => pushApi('subscribe', body)): Promise<PushSubscription> {
+export async function enablePush(registration: ServiceWorkerRegistration, publicKey: string, enroll: (body: unknown) => Promise<unknown> = body => pushApi('subscribe', body), admission?: () => void): Promise<PushSubscription> {
   if (new URL(registration.scope).pathname !== '/lite/') throw new Error('Homeling notifications require the /lite/ worker');
+  const check = admission ?? sessionState.admit();
+  check();
   let subscription = await registration.pushManager.getSubscription();
+  check();
   const created = !subscription;
   subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(publicKey) });
-  try { await enroll(subscription.toJSON()); }
+  try { check(); await enroll(subscription.toJSON()); }
   catch (error) {
+    // Only this already-dispatched allocation is compensated; old existing subscriptions stay intact.
     if (created) await subscription.unsubscribe();
     throw error;
   }

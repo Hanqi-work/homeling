@@ -10,7 +10,7 @@ export interface MutationAdmission {
 }
 interface Lease {
   readonly subject: string;
-  readonly epoch: number;
+  epoch: number;
   readonly absoluteDeadline: number;
   idleDeadline: number;
   locked: boolean;
@@ -34,7 +34,7 @@ const verifier = (token: string) => createHash("sha256").update("homeling/sessio
 /** Server-clock leases; dispatch validation and invocation occupy one synchronous turn. */
 export class SessionLock {
   private readonly sessions = new Map<string, Lease>();
-  private readonly actors = new WeakMap<MutationActor, Lease>();
+  private readonly actors = new WeakMap<MutationActor, { lease: Lease; epoch: number }>();
   private epoch = 0;
   private lastNow = -Infinity;
   private readonly now: () => number;
@@ -57,7 +57,7 @@ export class SessionLock {
   private valid(lease: Lease): void {
     const now = this.time();
     if (lease.locked || now >= lease.idleDeadline || now >= lease.absoluteDeadline) {
-      lease.locked = true;
+      if (!lease.locked) { lease.locked = true; lease.epoch = ++this.epoch; }
       throw new SessionLocked();
     }
   }
@@ -84,20 +84,20 @@ export class SessionLock {
   lock(token: string | undefined, subject: string): void {
     if (!token) return;
     const lease = this.sessions.get(verifier(token));
-    if (lease?.subject === subject) lease.locked = true;
+    if (lease?.subject === subject && !lease.locked) { lease.locked = true; lease.epoch = ++this.epoch; }
   }
   admit(token: string | undefined, subject: string): MutationActor {
     const lease = token ? this.sessions.get(verifier(token)) : undefined;
     if (!lease || lease.subject !== subject) throw new SessionLocked();
     this.valid(lease);
     const actor: MutationActor = { [actorBrand]: true };
-    this.actors.set(actor, lease);
+    this.actors.set(actor, { lease, epoch: lease.epoch });
     return actor;
   }
   assert(actor: MutationActor): void {
-    const lease = this.actors.get(actor);
-    if (!lease) throw new SessionLocked();
-    this.valid(lease);
+    const bound = this.actors.get(actor);
+    if (!bound || bound.epoch !== bound.lease.epoch) throw new SessionLocked();
+    this.valid(bound.lease);
   }
   admission(actor: MutationActor): MutationAdmission {
     return { assert: () => this.assert(actor), dispatch: <T>(effect: () => T): T => this.dispatch(actor, effect) };
@@ -108,7 +108,7 @@ export class SessionLock {
   }
   activity(token: string | undefined, subject: string): SessionState {
     const actor = this.admit(token, subject);
-    const lease = this.actors.get(actor)!;
+    const lease = this.actors.get(actor)!.lease;
     lease.idleDeadline = Math.min(this.time() + this.idleMs, lease.absoluteDeadline);
     return this.state(token, subject);
   }

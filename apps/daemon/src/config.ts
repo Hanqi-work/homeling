@@ -33,6 +33,9 @@ export interface DaemonConfig {
   readonly pushDataDir?: string;
   /** Required VAPID contact; unset disables push without touching Collie. */
   readonly pushSubject?: string;
+  /** Dedicated owner-only Markdown storage; injected fixtures may supply their own store. */
+  readonly memoryPath?: string;
+
   /** Herdr Unix socket path (HERDR_SOCKET_PATH-compatible). */
   readonly herdrSocketPath: string;
   /** Owner-only local unlock state, never inside Collie or the repository. */
@@ -106,6 +109,7 @@ export function daemonConfigFromEnv(env: Record<string, string | undefined>): Da
     pushDataDir: readPushDirectory(env.HOMELING_PUSH_DIR ?? process.env.HOMELING_PUSH_DIR),
     pushSubject: env.HOMELING_PUSH_SUBJECT ?? process.env.HOMELING_PUSH_SUBJECT,
     registryPath: env.HOMELING_REGISTRY_PATH ?? process.env.HOMELING_REGISTRY_PATH ?? join(homedir(), ".config", "homeling", "registry.json"),
+    memoryPath: env.HOMELING_MEMORY_DIR ?? process.env.HOMELING_MEMORY_DIR ?? join(env.HOMELING_DATA_DIR ?? process.env.HOMELING_DATA_DIR ?? join(homedir(), "Library", "Application Support", "Homeling"), "memory"),
     unlockDataDir: env.HOMELING_DATA_DIR ?? process.env.HOMELING_DATA_DIR ?? join(homedir(), "Library", "Application Support", "Homeling"),
     sessionDevHttp: (env.HOMELING_SESSION_DEV_HTTP ?? process.env.HOMELING_SESSION_DEV_HTTP) === "1",
     herdrSocketPath: env.HERDR_SOCKET_PATH ?? process.env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock"),

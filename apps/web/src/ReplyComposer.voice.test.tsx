@@ -36,6 +36,7 @@ function media() {
     stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["clip"]) }); this.onstop?.(); },
   };
   const dependencies: VoiceInputDependencies = {
+    admit: () => () => {},
     getStream: async () => ({ getTracks: () => [{ stop: () => { released++; } }] }),
     createRecorder: () => recorder,
     transcribe: async (_audio, abort) => { signal = abort; return new Promise<string>((r) => { resolve = r; }); },

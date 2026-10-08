@@ -7,12 +7,13 @@ import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { latestPersonaLine, personaStatusLabel } from "./persona-home.ts";
 import type { PersonaShellSlots } from "./shell-slots.ts";
 import { PersonaDetail } from "./PersonaDetail.tsx";
+import { LanguageSettings, useLocale } from "./locale.tsx";
 
 const control = "min-h-12 rounded-xl px-4 py-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300";
 
 export function PersonaLink({ persona, preview, stale = false }: { persona: PersonaView; preview?: string; stale?: boolean }) {
   return <Link to={`/persona/${encodeURIComponent(persona.id)}`} className="flex min-h-24 items-center gap-4 rounded-2xl bg-neutral-900 px-4 py-4 transition-colors hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300">
-    <PersonaAvatar avatar={persona.avatar} />
+    <PersonaAvatar avatar={persona.avatar} persona={persona} stale={stale} />
     <span className="min-w-0 flex-1">
       <span className="block truncate text-lg font-medium">{persona.name}</span>
       <span className="block text-sm text-neutral-400">{personaStatusLabel(persona, stale)}</span>
@@ -112,6 +113,7 @@ export function PersonaHome({ summary }: { summary?: React.ReactNode }) {
 }
 
 export function App({ slots = {} }: { slots?: PersonaShellSlots }) {
+  const { t } = useLocale();
   return <div className="mx-auto min-h-dvh max-w-lg">
     <main className="px-5 pt-10 pb-32 sm:px-6">
       <Routes>
@@ -121,12 +123,12 @@ export function App({ slots = {} }: { slots?: PersonaShellSlots }) {
         <Route path="/persona/:personaId/memory" element={<PersonaDetail slots={slots} entry="memory" />} />
         <Route path="/persona/:personaId/activity" element={<PersonaDetail slots={slots} entry="activity" />} />
         <Route path="/persona/:personaId/customize" element={<PersonaDetail slots={slots} entry="customize" />} />
-        <Route path="/settings" element={<section><h1 className="mb-6 text-3xl font-semibold">Settings</h1>{slots.settings ?? <p className="text-neutral-400">No additional settings are enabled yet.</p>}</section>} />
+        <Route path="/settings" element={<section><h1 className="mb-6 text-3xl font-semibold">{t("common.settings")}</h1>{slots.settings}<LanguageSettings /></section>} />
         <Route path="*" element={<section><h1 className="text-2xl font-semibold">Page not found</h1><Link to="/" className={`${control} mt-4 inline-block`}>Back to Homelings</Link></section>} />
       </Routes>
     </main>
     <nav aria-label="Main navigation" className="fixed inset-x-0 bottom-0 z-10 mx-auto flex max-w-lg justify-around border-t border-neutral-800 bg-neutral-950 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-      {[["/", "Homelings"], ["/new", "New"], ["/settings", "Settings"]].map(([to, label]) => <NavLink key={to} to={to!} end className={({ isActive }) => `${control} text-sm ${isActive ? "bg-neutral-800 text-green-200" : "text-neutral-400"}`}>{label}</NavLink>)}
+      {[["/", "Homelings"], ["/new", "New"], ["/settings", t("common.settings")]].map(([to, label]) => <NavLink key={to} to={to!} end className={({ isActive }) => `${control} text-sm ${isActive ? "bg-neutral-800 text-green-200" : "text-neutral-400"}`}>{label}</NavLink>)}
     </nav>
   </div>;
 }

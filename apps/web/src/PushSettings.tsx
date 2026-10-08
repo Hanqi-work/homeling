@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { enablePush, pushApi, type PushStatus } from './push-client.ts';
+import { sessionState } from './session-state.ts';
 
 export function PushSettings() {
   const [status, setStatus] = useState<PushStatus | null>(null);
@@ -23,9 +24,9 @@ export function PushSettings() {
     })();
     return () => { active = false; };
   }, [supported]);
-  const act = async (operation: () => Promise<void>) => {
+  const act = async (operation: (admission: () => void) => Promise<void>) => {
     setBusy(true); setError(null);
-    try { await operation(); await refresh(); }
+    try { const admission = sessionState.admit(); await operation(admission); await refresh(); }
     catch (err) { setError(err instanceof Error ? err.message : '通知操作失败。'); }
     finally { setBusy(false); }
   };
@@ -39,14 +40,15 @@ export function PushSettings() {
       <div className="mt-3 flex flex-wrap gap-2">
         <button className={button} disabled={busy || !registration || !status} onClick={() => {
           // Permission prompt starts synchronously within this explicit gesture, before async API calls.
-          const permission = Notification.requestPermission();
-          void act(async () => {
-            if (await permission !== 'granted') throw new Error('通知权限未允许。请在系统设置中允许通知后重试。');
-            setSubscription(await enablePush(registration!, status!.publicKey));
+          void act(async (admission) => {
+            if (await Notification.requestPermission() !== 'granted') throw new Error('通知权限未允许。请在系统设置中允许通知后重试。');
+            admission();
+            setSubscription(await enablePush(registration!, status!.publicKey, undefined, admission));
           });
         }}>{connected ? '重新连接通知' : '允许并订阅'}</button>
-        <button className={button} disabled={busy || !subscription} onClick={() => void act(async () => {
+        <button className={button} disabled={busy || !subscription} onClick={() => void act(async (admission) => {
           await pushApi('unsubscribe', { endpoint: subscription!.endpoint });
+          admission();
           if (!await subscription!.unsubscribe()) throw new Error('浏览器取消订阅未成功，可重试。');
           setSubscription(null);
         })}>取消此设备订阅</button>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
-import { SessionStateStore } from "./session-state.ts";
+import { sessionState, SessionStateStore } from "./session-state.ts";
 import { historyReducer, initialHistoryState } from "./history-reducer.ts";
 import type { TranscriptEntry } from "@homeling/contracts";
 
@@ -9,6 +9,12 @@ async function flushQueue(): Promise<void> {
 }
 
 describe("createDeferredSendQueue", () => {
+  test("the default queue never treats an unknown session as permission to send", async () => {
+    sessionState.lock(); let writes = 0; const suspended: string[] = [];
+    const queue = createDeferredSendQueue(undefined, (id) => suspended.push(id));
+    await queue.enqueue("draft", async () => { writes++; });
+    expect(writes).toBe(0); expect(suspended).toEqual(["draft"]);
+  });
   test("history unblock after locking and unlocking never replays deferred writes from the old epoch", async () => {
     const session = new SessionStateStore();
     session.apply({ locked: false, epoch: 1, generation: "boot" }); session.caughtUp();
@@ -26,7 +32,7 @@ describe("createDeferredSendQueue", () => {
     expect(writes).toEqual(["new"]);
   });
   test("runs concurrent sends one at a time in enqueue order", async () => {
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     const order: string[] = [];
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -45,7 +51,7 @@ describe("createDeferredSendQueue", () => {
   });
 
   test("defers already-queued messages until the partial-input retry resolves", async () => {
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     const order: string[] = [];
     const first = queue.enqueue("A", async () => {
       order.push("A:send");
@@ -63,7 +69,7 @@ describe("createDeferredSendQueue", () => {
   });
 
   test("skips a queued retry if history confirms it before dequeue", async () => {
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     let releaseFirst!: () => void;
     const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const first = queue.enqueue("busy", async () => { await gate; });
@@ -85,7 +91,7 @@ describe("createDeferredSendQueue", () => {
     state = historyReducer(state, {
       type: "outgoing-failed", paneId, id: blockerId, textDelivered: true,
     });
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     queue.block(blockerId);
     const order: string[] = [];
     await queue.enqueue("optimistic-b", async () => { order.push("B"); });
@@ -111,7 +117,7 @@ describe("createDeferredSendQueue", () => {
       type: "outgoing-added", paneId, id, text: "A", sentAt: Date.parse("2026-10-01T00:00:01Z"),
     });
     state = historyReducer(state, { type: "outgoing-failed", paneId, id, textDelivered: null });
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     queue.block(id);
     let posts = 0;
     const retry = enqueueUnlessConfirmed(queue, id, () => Boolean(state.outgoing[0]?.matchedUuid), async () => { posts += 1; });
@@ -123,7 +129,7 @@ describe("createDeferredSendQueue", () => {
   });
 
   test("continues after a failed operation", async () => {
-    const queue = createDeferredSendQueue();
+    const queue = createDeferredSendQueue(() => () => {});
     const order: string[] = [];
     await expect(queue.enqueue("failed", async () => { throw new Error("failed"); })).rejects.toThrow("failed");
     await queue.enqueue("next", async () => { order.push("next"); });
