@@ -44,6 +44,7 @@ export function HomeTriage({ suspended = false, pollIntervalMs = 2000 }: { suspe
                 if (request.personaId !== persona.id || request.status !== "pending") continue;
                 const occurrence = [...activity.occurrences].reverse().find((item) => item.paneId === request.paneId);
                 if (occurrence?.status !== "active" || occurrence.personaId !== persona.id || occurrence.spaceId !== persona.spaceId) continue;
+                if (request.taskOccurrenceKey !== undefined && request.taskOccurrenceKey !== occurrence.occurrenceKey) continue;
                 const task = await fetchTaskOccurrence(occurrence.occurrenceKey, signal);
                 if (signal.aborted) return;
                 if (task.current && task.liveAvailable && task.observation === "live" && task.occurrence.occurrenceKey === occurrence.occurrenceKey && task.occurrence.paneId === request.paneId && task.occurrence.personaId === persona.id && task.occurrence.spaceId === persona.spaceId && task.occurrence.status === "active") {

@@ -55,7 +55,7 @@ test("home counts distinct registry personas, not requests, spaces, legacy or se
     ? Response.json({ personas: [mira, { ...mira, id: "sol", name: "Sol", mainPaneId: "sol-main" }] })
     : String(url).includes("/activity/task/") ? Response.json(taskLookup("task /1"))
     : String(url).endsWith("/activity") ? Response.json(activity("task /1"))
-    : Response.json([request("1", "mira"), request("2", "mira", "task /1"), request("3", "sol", "sol-main"), request("4", "space-not-persona"), request("5", undefined), request("6", "unknown"), request("7", "mira", "main", "resolved"), request("8", "sol", "sol-main", "expired")])) as unknown as typeof fetch;
+    : Response.json([request("1", "mira"), { ...request("2", "mira", "task /1"), taskOccurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8001" }, request("3", "sol", "sol-main"), request("4", "space-not-persona"), request("5", undefined), request("6", "unknown"), request("7", "mira", "main", "resolved"), request("8", "sol", "sol-main", "expired")])) as unknown as typeof fetch;
   await mount();
   expect(container.textContent).toContain("2 个伙伴需要你");
   expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["/persona/mira", "/p/task%20%2F1?occurrence=3f0ec6a3-14db-40e5-a222-cade2e7f8001", "/persona/sol"]);
@@ -88,12 +88,12 @@ test("read failure is visible and preserves only an explicitly labelled last con
   expect(container.textContent).toContain("1 个伙伴需要你");
 });
 
-test.each(["settled-latest", "reused-owner", "not-current", "not-live-available", "gap", "wrong-persona", "wrong-space", "read-failed"])("unconfirmed task %s retains persona count without exposing an unscoped writable link", async (scenario) => {
+test.each(["settled-latest", "reused-owner", "not-current", "not-live-available", "request-key-mismatch", "gap", "wrong-persona", "wrong-space", "read-failed"])("unconfirmed task %s retains persona count without exposing an unscoped writable link", async (scenario) => {
   const current = activity("task");
   globalThis.fetch = (async (url: RequestInfo | URL) => {
     if (String(url).endsWith("persona/list")) return Response.json({ personas: [mira] });
     if (String(url).includes("/activity/task/")) return Response.json({ occurrence: current.occurrences[0], current: scenario !== "not-current", liveAvailable: scenario !== "not-live-available", observation: "live" });
-    if (!String(url).endsWith("/activity")) return Response.json([request("task-request", "mira", "task")]);
+    if (!String(url).endsWith("/activity")) return Response.json([{ ...request("task-request", "mira", "task"), ...(scenario === "request-key-mismatch" ? { taskOccurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002" } : {}) }]);
     if (scenario === "read-failed") throw new Error("offline");
     return Response.json({ ...current, observation: scenario === "gap" ? "gap" : "live", occurrences: scenario === "reused-owner"
       ? [...current.occurrences, { ...current.occurrences[0], occurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8002", personaId: "other-owner", spaceId: "other-space" }]
@@ -275,7 +275,7 @@ test("triage consumes real daemon ledger ownership and scoped history, and the s
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input); calls.push(path);
       if (path.endsWith("persona/list")) return Response.json({ personas: [mira] });
-      if (path.endsWith("requests")) return Response.json([{ ...request("approval", "mira", "owned-task"), payload: { question: "Owned task permission", options: [{ id: "yes", label: "Allow owned task" }] } }]);
+      if (path.endsWith("requests")) return Response.json([{ ...request("approval", "mira", "owned-task"), taskOccurrenceKey: occurrence.occurrenceKey, payload: { question: "Owned task permission", options: [{ id: "yes", label: "Allow owned task" }] } }]);
       if (path.endsWith("snapshot")) return Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] });
       if (path.endsWith("launchers")) return Response.json({ launchers: [] });
       const req = Object.assign(new Request(new URL(path, "http://localhost:8790"), { ...init, headers: { host: "localhost:8790" } }), { remoteAddress: "127.0.0.1" });

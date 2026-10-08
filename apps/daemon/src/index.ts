@@ -184,7 +184,7 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
-  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop)$/);
+  const taskAction = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/(history|screen|reply|stop|control-key)$/);
   if (taskAction) {
     if (!runtime.activity) return Response.json({ error: "Activity unavailable" }, { status: 503 });
     const action = taskAction[2]!;
@@ -204,10 +204,11 @@ export async function handleRequest(
         if (init?.method === "GET" || init?.method === "HEAD" || !init?.method) return upstreamFetch(input, init);
         return runtime.activity!.dispatchCurrent(key, admission!, (bound) => {
           if (bound.paneId !== occurrence.paneId) throw new TaskOccurrenceUnavailable();
+          if (action === "reply" && controlKeyBlocksText(cfg, bound.paneId)) return Response.json({ ok: false, executed: false, textDelivered: false, deliveryUnknown: false, error: "Cancellation is in flight or unknown; inspect the terminal before sending text" }, { status: 409 });
           return upstreamFetch(input, init);
         }).catch((error) => { refused = error; throw error; });
       };
-      const response = await proxyBridgeRequest(forwarded, cfg, guardedFetch);
+      const response = action === "control-key" ? await sendControlKey(forwarded, cfg, guardedFetch, requestStore(cfg)) : await proxyBridgeRequest(forwarded, cfg, guardedFetch);
       if (refused instanceof SessionLocked) return sessionRefusal();
       if (refused instanceof TaskOccurrenceUnavailable) return stale();
       if (method === "POST") return response;

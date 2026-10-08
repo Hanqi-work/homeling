@@ -13,7 +13,7 @@ const control = "min-h-12 rounded-xl px-4 py-3 focus-visible:outline focus-visib
 
 export function PersonaLink({ persona, preview, stale = false }: { persona: PersonaView; preview?: string; stale?: boolean }) {
   return <Link to={`/persona/${encodeURIComponent(persona.id)}`} className="flex min-h-24 items-center gap-4 rounded-2xl bg-neutral-900 px-4 py-4 transition-colors hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300">
-    <PersonaAvatar avatar={persona.avatar} />
+    <PersonaAvatar avatar={persona.avatar} persona={persona} stale={stale} />
     <span className="min-w-0 flex-1">
       <span className="block truncate text-lg font-medium">{persona.name}</span>
       <span className="block text-sm text-neutral-400">{personaStatusLabel(persona, stale)}</span>

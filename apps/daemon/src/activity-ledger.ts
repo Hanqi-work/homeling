@@ -22,8 +22,12 @@ function validatedLedger(value: unknown): LedgerState {
   const date = (item: unknown): boolean => text(item) && Number.isFinite(Date.parse(item));
   if (!object(value) || value.version !== 1 || !Array.isArray(value.events) || !Array.isArray(value.occurrences)) return invalid();
   const occurrences = new Map<string, Record<string, unknown>>();
+  const paneBindings = new Map<string, Record<string, unknown>>();
   for (const item of value.occurrences) {
     if (!object(item) || !text(item.occurrenceKey) || !text(item.personaId) || !text(item.spaceId) || !text(item.paneId) || !text(item.title) || !date(item.createdAt) || !["active", "completed", "failed", "unknown"].includes(String(item.status)) || occurrences.has(item.occurrenceKey)) return invalid();
+    const previous = paneBindings.get(item.paneId);
+    if (previous && (previous.personaId !== item.personaId || previous.spaceId !== item.spaceId || previous.status === "active")) return invalid();
+    paneBindings.set(item.paneId, item);
     occurrences.set(item.occurrenceKey, item);
   }
   const ids = new Set<string>(); const keys = new Set<string>();

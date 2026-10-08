@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router";
 import { AppRoot } from "./AppRoot.tsx";
 import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
+import { PersonaCustomize } from "./PersonaCustomize.tsx";
 import { PushSettings } from "./PushSettings.tsx";
 import { LocaleProvider } from "./locale.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
@@ -24,6 +25,7 @@ createRoot(root).render(
         <AppRoot slots={{
           homeSummary: <SessionAwareHomeTriage />,
           memory: (personaId) => <PersonaMemoryEditor personaId={personaId} />,
+          customize: (personaId) => <PersonaCustomize personaId={personaId} />,
           activity: (personaId) => <Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading activity…</main>}><ActivityPanel personaId={personaId} /></Suspense>,
           settings: <PushSettings />,
         }} />
