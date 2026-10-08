@@ -6,6 +6,7 @@
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import { dirname, join } from "node:path";
 import { ActivityLedger } from "./activity-ledger.ts";
+import { createActivityObserver } from "./activity-observer.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { controlKeyBlocksText, sendControlKey } from "./control-key.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetch } from "./bridge-proxy.ts";
@@ -172,8 +173,6 @@ export async function handleRequest(
     return Response.json({ ok: true, service: "homeling-daemon" });
   }
 
-  // Cached persona services receive the raw transport; each service carries its current admission.
-  // Never retain the request-scoped fetch wrapper (or a prior request's lease) in a WeakMap.
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
   const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
   const occurrenceMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)$/);
@@ -301,7 +300,11 @@ export async function handleRequest(
       if (typeof body.personaId !== "string" || typeof body.command !== "string") {
         return Response.json({ ok: false, error: "personaId and command required", code: "request.invalid" }, { status: 400 });
       }
-      return launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!);
+      try { return await launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!); }
+      catch (error) {
+        if (error instanceof SessionLocked) return sessionRefusal();
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: "launch.failed" }, { status: 502 });
+      }
     }
   }
 
@@ -346,6 +349,8 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
     return null;
   });
   pushRuntimes.set(cfg, push);
+  const activityObserver = createActivityObserver(runtime.activity!, runtime.herdr, system.activityObserve);
+  runtime.observeTask = (paneId) => activityObserver.watch(paneId);
   void recoverPersonas(runtime, system.personaRecovery).catch((error: unknown) => {
     console.error(`[homeling-daemon] persona recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
   });

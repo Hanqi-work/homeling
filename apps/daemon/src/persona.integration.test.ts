@@ -182,6 +182,15 @@ function request(path: string, options: { method?: string; body?: string; conten
 }
 
 describe("persona creation loop over an in-memory Herdr socket", () => {
+  test("a read-created cached runtime never retains a prior request's admission", async () => {
+    const { cfg, fetcher, deliveries } = await fixture();
+    expect((await handleRequest(request("/lite/api/persona/list"), cfg, fetcher)).status).toBe(200);
+    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher);
+    const { persona } = await created.json() as { persona: { id: string } };
+    const sent = await handleRequest(request(`/lite/api/persona/${persona.id}/message`, { method: "POST", contentType: "application/json", body: JSON.stringify({ text: "hello" }) }), cfg, fetcher);
+    expect(sent.status).toBe(200);
+    expect(deliveries).toHaveLength(1);
+  });
   test("persona message routing cannot bypass an unknown cancellation on its latest main pane", async () => {
     const { cfg, deliveries, fetcher, runtime } = await fixture();
     const created = await handleRequest(request("/lite/api/persona", {
@@ -206,15 +215,6 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     expect(message.status).toBe(409);
     expect(await message.json()).toMatchObject({ textDelivered: false });
     expect(deliveries).toHaveLength(0);
-  });
-  test("a read-created cached runtime never retains a prior request's admission", async () => {
-    const { cfg, fetcher, deliveries } = await fixture();
-    expect((await handleRequest(request("/lite/api/persona/list"), cfg, fetcher)).status).toBe(200);
-    const created = await handleRequest(request("/lite/api/persona", { method: "POST", contentType: "application/json", body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }) }), cfg, fetcher);
-    const { persona } = await created.json() as { persona: { id: string } };
-    const sent = await handleRequest(request(`/lite/api/persona/${persona.id}/message`, { method: "POST", contentType: "application/json", body: JSON.stringify({ text: "hello" }) }), cfg, fetcher);
-    expect(sent.status).toBe(200);
-    expect(deliveries).toHaveLength(1);
   });
   test("creates, messages, launches owned tasks, lists status, and restores a missing main pane", async () => {
     const { cfg, state, deliveries, bridgeCalls, fetcher, runtime } = await fixture();

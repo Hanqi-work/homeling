@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { handleUnlockedRequest as handleRequest } from './session-test-fixture.ts';
+import { handleUnlockedRequest as handleRequest } from "./session-test-fixture.ts";
 import { daemonConfigFromEnv } from "./config.ts";
 import type { BridgeFetch } from "./bridge-proxy.ts";
 
@@ -8,7 +8,7 @@ const identity = JSON.stringify(["w1:p1", "w1", "t1", "claude", "/work", "s1", n
 const screen = "Working on task\n  keep this indentation";
 function config() { return { ...daemonConfigFromEnv({}), trustedUsers: ["me"], tailscaleHost: "home.tail.ts.net" }; }
 function request(body: unknown = { action: "interrupt", identity, confirmed: true }, path = "/lite/api/pane/w1:p1/control-key", headers: Record<string, string> = {}) {
-  return Object.assign(new Request(`http://localhost:8790${path}`, { method: "POST", headers: { host: 'home.tail.ts.net', 'content-type': 'application/json', ...(!headers.host ? { 'tailscale-user-login': 'me', origin: 'https://home.tail.ts.net' } : {}), ...headers }, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
+  return Object.assign(new Request(`https://home.tail.ts.net${path}`, { method: "POST", headers: { host: "home.tail.ts.net", "content-type": "application/json", ...(headers.host === undefined ? { origin: "https://home.tail.ts.net", "tailscale-user-login": "me" } : {}), ...headers }, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
 }
 function bridge(options: { status?: string; changed?: boolean; truncated?: boolean; failure?: string } = {}) {
   const writes: Record<string, unknown>[] = [];

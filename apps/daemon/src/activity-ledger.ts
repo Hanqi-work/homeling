@@ -11,6 +11,42 @@ interface LedgerState {
   events: ActivityEvent[];
   occurrences: TaskOccurrence[];
   worked?: string[];
+  workEpochs?: Record<string, string>;
+  completionEpochs?: Record<string, string>;
+}
+
+function validatedLedger(value: unknown): LedgerState {
+  const invalid = (): never => { throw new Error("Invalid activity ledger"); };
+  const object = (item: unknown): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item);
+  const text = (item: unknown): item is string => typeof item === "string" && item.length > 0;
+  const date = (item: unknown): boolean => text(item) && Number.isFinite(Date.parse(item));
+  if (!object(value) || value.version !== 1 || !Array.isArray(value.events) || !Array.isArray(value.occurrences)) return invalid();
+  const occurrences = new Map<string, Record<string, unknown>>();
+  for (const item of value.occurrences) {
+    if (!object(item) || !text(item.occurrenceKey) || !text(item.personaId) || !text(item.spaceId) || !text(item.paneId) || !text(item.title) || !date(item.createdAt) || !["active", "completed", "failed", "unknown"].includes(String(item.status)) || occurrences.has(item.occurrenceKey)) return invalid();
+    occurrences.set(item.occurrenceKey, item);
+  }
+  const ids = new Set<string>(); const keys = new Set<string>();
+  const kinds = new Map<string, Set<string>>();
+  let sequence = 0;
+  for (const item of value.events) {
+    if (!object(item) || !text(item.id) || !text(item.occurrenceKey) || !text(item.kind) || !text(item.dedupeKey) || !date(item.occurredAt) || !["task.created", "task.completed", "task.failed", "task.unknown", "observation.gap"].includes(item.kind) || !["daemon.launch", "herdr.event", "daemon.observer"].includes(String(item.source)) || (item.detail !== undefined && typeof item.detail !== "string") || item.sequence !== sequence + 1 || ids.has(item.id) || keys.has(item.dedupeKey)) return invalid();
+    const occurrence = occurrences.get(item.occurrenceKey);
+    if (!occurrence || occurrence.paneId !== item.paneId || occurrence.personaId !== item.personaId || item.dedupeKey !== `${item.occurrenceKey}:${item.kind}`) return invalid();
+    ids.add(item.id); keys.add(item.dedupeKey); sequence++;
+    const found = kinds.get(item.occurrenceKey) ?? new Set<string>(); found.add(item.kind); kinds.set(item.occurrenceKey, found);
+  }
+  for (const [key, occurrence] of occurrences) {
+    const found = kinds.get(key);
+    if (!found?.has("task.created")) return invalid();
+    const terminal = ["task.completed", "task.failed", "task.unknown"].filter((kind) => found.has(kind));
+    if (terminal.length > 1 || (occurrence.status === "active" ? terminal.length !== 0 : terminal[0] !== `task.${occurrence.status}`)) return invalid();
+  }
+  if (value.worked !== undefined && (!Array.isArray(value.worked) || value.worked.some((key) => typeof key !== "string" || !occurrences.has(key)))) return invalid();
+  for (const epochs of [value.workEpochs, value.completionEpochs]) {
+    if (epochs !== undefined && (!object(epochs) || Object.entries(epochs).some(([key, epoch]) => !occurrences.has(key) || !text(epoch)))) return invalid();
+  }
+  return value as unknown as LedgerState;
 }
 
 type ObservedEvent = { kind: "status"; paneId: string; spaceId: string; status: "idle" | "working" | "blocked" | "done" | "unknown" } | { kind: "exit"; paneId: string; spaceId: string };
@@ -31,13 +67,12 @@ export class ActivityLedger {
   private tail: Promise<void> = Promise.resolve();
   private listeners = new Set<(event: ActivityEvent) => void>();
   private observation: ActivityResponse["observation"] = "starting";
+  private observationEpoch = randomUUID();
   constructor(readonly path: string) {}
 
   private async read(): Promise<LedgerState> {
     try {
-      const state = JSON.parse(await readFile(this.path, "utf8")) as LedgerState;
-      if (state.version !== 1 || !Array.isArray(state.events) || !Array.isArray(state.occurrences)) throw new Error("Invalid activity ledger");
-      return state;
+      return validatedLedger(JSON.parse(await readFile(this.path, "utf8")));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return { version: 1, events: [], occurrences: [] };
@@ -100,12 +135,13 @@ export class ActivityLedger {
   }
 
   observe(event: string, data: unknown, admission: SystemAdmission<"activity.observe">): Promise<void> {
+    if (admission.scope !== "activity.observe") return Promise.reject(new Error("activity.observe scope required"));
     const raw = normalizeHerdrActivityEvent(event, data);
     if (!raw) return Promise.resolve();
     return this.commit(admission, (state) => {
       let occurrence = [...state.occurrences].reverse().find((item) => item.paneId === raw.paneId);
       if (!occurrence || occurrence.spaceId !== raw.spaceId) return;
-      if (occurrence.status === "completed" && raw.kind === "status" && raw.status === "working") {
+      if (occurrence.status === "completed" && state.completionEpochs?.[occurrence.occurrenceKey] === this.observationEpoch && raw.kind === "status" && raw.status === "working") {
         occurrence = { ...occurrence, occurrenceKey: randomUUID(), createdAt: new Date().toISOString(), status: "active" };
         state.occurrences.push(occurrence);
         this.append(state, occurrence, "task.created", "herdr.event", "New work cycle observed after explicit completion");
@@ -113,21 +149,23 @@ export class ActivityLedger {
       if (occurrence.status !== "active") return;
       if (raw.kind === "status") {
         if (raw.status === "working") {
-          if (!state.events.some((item) => item.occurrenceKey === occurrence.occurrenceKey && item.kind === "task.completed")) {
-            state.worked ??= [];
-            if (!state.worked.includes(occurrence.occurrenceKey)) state.worked.push(occurrence.occurrenceKey);
-          }
+          state.workEpochs ??= {};
+          state.workEpochs[occurrence.occurrenceKey] = this.observationEpoch;
           return;
         }
-        if (raw.status !== "done" || !state.worked?.includes(occurrence.occurrenceKey)) return;
+        if (raw.status !== "done" || state.workEpochs?.[occurrence.occurrenceKey] !== this.observationEpoch) return;
         this.settle(state, occurrence, "completed", "herdr.event");
+        state.completionEpochs ??= {};
+        state.completionEpochs[occurrence.occurrenceKey] = this.observationEpoch;
       } else this.settle(state, occurrence, "unknown", "herdr.event", "Pane exited/closed; Herdr provides no exit outcome");
     });
   }
 
   async gap(reason: string, admission: SystemAdmission<"activity.observe">): Promise<void> {
+    if (admission.scope !== "activity.observe") throw new Error("activity.observe scope required");
     this.observation = "gap";
     await this.commit(admission, (state) => {
+      this.observationEpoch = randomUUID();
       for (const occurrence of state.occurrences.filter((item) => item.status === "active")) {
         this.append(state, occurrence, "observation.gap", "daemon.observer", reason);
         this.settle(state, occurrence, "unknown", "daemon.observer", "Observation gap: completion/failure cannot be recovered from snapshots");
@@ -136,6 +174,7 @@ export class ActivityLedger {
   }
 
   live(admission: SystemAdmission<"activity.observe">): void {
+    if (admission.scope !== "activity.observe") throw new Error("activity.observe scope required");
     admission.assert();
     this.observation = "live";
   }

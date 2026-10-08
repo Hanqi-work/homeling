@@ -28,5 +28,13 @@ test('same occurrence sends once across restart, new occurrence can notify', asy
     await cancellable.retract('cancel-before-send');
     expect((await queued).suppressed).toBe(1);
     expect(sent).toHaveLength(2);
+    let failedCalls = 0;
+    const failedOutput = () => createPushOutput({ store: new PushStore(path), transport: { send: async () => { failedCalls++; return { status: 'failed' }; } }, clock: { now: () => 124 }, admission: admissions.pushDeliver, cleanupAdmission: admissions.pushCleanup });
+    expect((await failedOutput().send({ ...payload, occurrenceKey: 'uncertain-send' })).failed).toBe(1);
+    expect((await failedOutput().send({ ...payload, occurrenceKey: 'uncertain-send' })).suppressed).toBe(1);
+    expect(failedCalls).toBe(1);
+    const invalidOutput = createPushOutput({ store: new PushStore(path), transport: { send: async () => ({ status: 'invalid' }) }, clock: { now: () => 125 }, admission: admissions.pushDeliver, cleanupAdmission: admissions.pushCleanup });
+    expect((await invalidOutput.send({ ...payload, occurrenceKey: 'expired-subscription' })).invalid).toBe(1);
+    expect((await new PushStore(path).load()).subscriptions).toHaveLength(0);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
