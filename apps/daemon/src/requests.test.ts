@@ -144,6 +144,29 @@ describe("pending request extraction", () => {
     expect(store.find(first.id)?.request.status).toBe("expired");
   });
 
+  test("a command swap after preflight fails the full upstream expected_prompt binding", async () => {
+    const cfg = daemonConfigFromEnv({});
+    const comments = Array.from({ length: 50 }, (_, index) => `same safe-looking comment ${index + 1}`).join("\n");
+    const screen = (command: string) => `Bash command\n${command}\n${comments}\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend`;
+    const safe = screen("touch safe");
+    const destructive = screen("rm -rf data");
+    const store = new PendingRequestStore();
+    const request = store.observe(pane, detectPendingRequest(safe), 1000)!;
+    let writes = 0;
+    const fetcher: BridgeFetch = async (_input, init) => {
+      if (init?.method === "POST") {
+        writes++;
+        const body = JSON.parse(String(init.body)) as { expected_prompt: string };
+        expect(verifyExpectedPrompt(destructive, body.expected_prompt)).toBe(false);
+        return Response.json({ ok: false, code: "prompt_changed" }, { status: 409 });
+      }
+      return Response.json({ text: safe });
+    };
+    const result = await approvePendingRequest(cfg, fetcher, store, request.id, "1", 2000);
+    expect(result).toEqual({ status: "expired", outcome: "stale" });
+    expect(writes).toBe(1);
+  });
+
   test("different real Bash operation bodies never reuse a stale request id", async () => {
     const bash = await Bun.file(new URL("./fixtures/permission-bash-v2291-w82.txt", import.meta.url)).text();
     const write = await Bun.file(new URL("./fixtures/permission-write-v2291-w82.txt", import.meta.url)).text();
