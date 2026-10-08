@@ -6,6 +6,7 @@
 import { checkAccess, isLoopbackRequest, type AccessConfig } from "./access.ts";
 import { dirname, join } from "node:path";
 import { ActivityLedger } from "./activity-ledger.ts";
+import { createActivityObserver } from "./activity-observer.ts";
 import { daemonConfigFromEnv, type DaemonConfig } from "./config.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
@@ -16,6 +17,26 @@ import {
   createEventObserver, createPersona, deletePersona, launchPersonaTask, listPersonas, recoverPersonas,
   sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
 } from "./persona-service.ts";
+
+import { createDaemonSystemAdmissions } from "./system-admission.ts";
+import { SessionController } from "./session-controller.ts";
+import { SessionLocked, lockedResponse, type MutationAdmission } from "./session-lock.ts";
+import { loadUnlockVerifier } from "./unlock-credentials.ts";
+
+const sessionControllers = new WeakMap<DaemonConfig, SessionController>();
+function sessionController(cfg: DaemonConfig): SessionController {
+  let controller = sessionControllers.get(cfg);
+  if (!controller) {
+    controller = new SessionController({ devHttp: cfg.sessionDevHttp, verify: () => cfg.unlockDataDir ? loadUnlockVerifier(cfg.unlockDataDir) : null });
+    sessionControllers.set(cfg, controller);
+  }
+  return controller;
+}
+function mutationOriginAllowed(req: Request & { remoteAddress?: string | null }, cfg: DaemonConfig): boolean {
+  if (!cfg.sessionDevHttp) return hasTailscaleOrigin(req, cfg);
+  if (!isLoopbackRequest(req) || req.headers.has("tailscale-user-login")) return false;
+  return req.headers.get("origin") === `http://localhost:${cfg.port}` && new URL(req.url).hostname === "localhost";
+}
 
 export const API_HEALTH_PATH = "/lite/api/health";
 export const API_REQUESTS_PATH = "/lite/api/requests";
@@ -90,6 +111,7 @@ export async function handleRequest(
   cfg: DaemonConfig,
   fetcher: BridgeFetch = fetch,
   runtimeOverride?: PersonaRuntime,
+  sessionOverride?: SessionController,
 ): Promise<Response> {
   const denied = checkAccess(req, accessConfigOf(cfg));
   if (!denied.ok) {
@@ -100,6 +122,28 @@ export async function handleRequest(
   }
 
   const { pathname } = new URL(req.url);
+  const isMutation = req.method !== "GET" && req.method !== "HEAD";
+  if (isMutation && !mutationOriginAllowed(req, cfg)) {
+    return new Response("cross-origin rejected\n", { status: 403 });
+  }
+  const sessions = sessionOverride ?? sessionController(cfg);
+  const subject = req.headers.get("tailscale-user-login") ?? "local-operator";
+  const sessionResponse = await sessions.handle(req, subject);
+  if (sessionResponse) return sessionResponse;
+  let admission: MutationAdmission | undefined;
+  let dispatched = false;
+  const sessionRefusal = () => dispatched ? Response.json({ ok: false, code: "session.interrupted", executed: true, textDelivered: null, deliveryUnknown: true, error: "Locked during an operation; reconcile before retrying" }, { status: 423, headers: { "cache-control": "no-store" } }) : lockedResponse();
+  if (isMutation) {
+    try {
+      const admitted = sessions.admission(req, subject);
+      admission = { assert: () => admitted.assert(), dispatch<T>(effect: () => T): T { return admitted.dispatch(() => { dispatched = true; return effect(); }); } };
+    } catch { return lockedResponse(); }
+  }
+  const upstreamFetch = fetcher;
+  fetcher = (target, init) => {
+    const method = init?.method ?? "GET";
+    return method === "GET" || method === "HEAD" ? upstreamFetch(target, init) : admission!.dispatch(() => upstreamFetch(target, init));
+  };
   const isBridgeWritePost = req.method === "POST" && (
     pathname === `${BROWSER_API_PREFIX}launch` || pathname === `${BROWSER_API_PREFIX}stt` || /^\/lite\/api\/pane\/[^/]+\/(reply|keys|stop)$/.test(pathname)
   );
@@ -151,9 +195,10 @@ export async function handleRequest(
     const input = validatePersonaInput(await readJson(req));
     if (!input) return Response.json({ error: "invalid persona" }, { status: 400 });
     try {
-      const persona = await createPersona(runtime, input, req.headers.get("tailscale-user-login"));
+      const persona = await createPersona(runtime, input, req.headers.get("tailscale-user-login"), admission!);
       return Response.json({ persona: { ...persona, status: "active" } }, { status: 201 });
     } catch (error) {
+      if (error instanceof SessionLocked) return sessionRefusal();
       return Response.json({ error: error instanceof Error ? error.message : "Persona creation failed", code: error instanceof HerdrRpcError ? error.code : "persona.create_failed" }, { status: 502 });
     }
   }
@@ -166,8 +211,8 @@ export async function handleRequest(
     }
     let id: string;
     try { id = decodeURIComponent(personaMessageMatch[1]!); } catch { return Response.json({ error: "invalid persona id" }, { status: 400 }); }
-    try { return await sendPersonaMessage(runtime, id, body.text, req.headers.get("tailscale-user-login")); }
-    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Message delivery failed", code: "persona.message_failed" }, { status: 502 }); }
+    try { return await sendPersonaMessage(runtime, id, body.text, req.headers.get("tailscale-user-login"), admission!); }
+    catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Message delivery failed", code: "persona.message_failed" }, { status: 502 }); }
   }
   const personaMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)$/);
   if (personaMatch && (req.method === "PATCH" || req.method === "DELETE")) {
@@ -178,14 +223,14 @@ export async function handleRequest(
       const patch = validatePersonaPatch(await readJson(req));
       if (!patch) return Response.json({ error: "invalid persona patch" }, { status: 400 });
       try {
-        const persona = await updatePersona(runtime, id, patch);
+        const persona = await updatePersona(runtime, id, patch, admission!);
         return persona ? Response.json({ persona }) : Response.json({ error: "persona not found" }, { status: 404 });
-      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Persona update failed", code: "persona.update_failed" }, { status: 502 }); }
+      } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Persona update failed", code: "persona.update_failed" }, { status: 502 }); }
     }
     try {
-      const result = await deletePersona(runtime, id);
+      const result = await deletePersona(runtime, id, admission!);
       return result.deleted ? Response.json(result) : Response.json({ error: "persona not found" }, { status: 404 });
-    } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Persona delete failed", code: "persona.delete_failed" }, { status: 502 }); }
+    } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Persona delete failed", code: "persona.delete_failed" }, { status: 502 }); }
   }
   if (isPersonaWrite(pathname) && req.method !== "POST" && req.method !== "PATCH" && req.method !== "DELETE") {
     return new Response("method not allowed\\n", { status: 405, headers: { allow: "GET, POST, PATCH, DELETE" } });
@@ -236,7 +281,11 @@ export async function handleRequest(
       if (typeof body.personaId !== "string" || typeof body.command !== "string") {
         return Response.json({ ok: false, error: "personaId and command required", code: "request.invalid" }, { status: 400 });
       }
-      return launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"));
+      try { return await launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!); }
+      catch (error) {
+        if (error instanceof SessionLocked) return sessionRefusal();
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: "launch.failed" }, { status: 502 });
+      }
     }
   }
 
@@ -267,10 +316,13 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
     fetch,
   });
   const runtime = personaRuntime(cfg, globalThis.fetch);
-  void recoverPersonas(runtime).catch((error: unknown) => {
+  const system = createDaemonSystemAdmissions();
+  const activityObserver = createActivityObserver(runtime.activity!, runtime.herdr, system.activityObserve);
+  runtime.observeTask = (paneId) => activityObserver.watch(paneId);
+  void recoverPersonas(runtime, system.personaRecovery).catch((error: unknown) => {
     console.error(`[homeling-daemon] persona recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
   });
-  createEventObserver(runtime);
+  createEventObserver(runtime, system.personaRecovery);
   console.log(`[homeling-daemon] listening on http://${cfg.hostname}:${cfg.port} serving ${cfg.webDist} at /lite/`);
   return server;
 }
