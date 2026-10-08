@@ -28,6 +28,10 @@ describe("allowBridgePath — the narrow allowlist", () => {
     expect(allowBridgePath("/api/pane/w1:p2/reply", "POST")).toBe(true);
     expect(allowBridgePath("/api/pane/w1:p2/reply")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2/reply", "GET")).toBe(false);
+    expect(allowBridgePath("/api/launchers")).toBe(true);
+    expect(allowBridgePath("/api/launchers", "POST")).toBe(false);
+    expect(allowBridgePath("/api/launch", "POST")).toBe(true);
+    expect(allowBridgePath("/api/launch")).toBe(false);
   });
 
   test("everything a browser must not reach through the daemon is refused", () => {
@@ -36,7 +40,7 @@ describe("allowBridgePath — the narrow allowlist", () => {
     expect(allowBridgePath("/api/pane/w1:p2/close")).toBe(false);
     expect(allowBridgePath("/api/pane/w1:p2")).toBe(false);
     expect(allowBridgePath("/api/launch")).toBe(false);
-    expect(allowBridgePath("/api/launchers")).toBe(false);
+    expect(allowBridgePath("/api/launchers")).toBe(true);
     expect(allowBridgePath("/api/snapshot/x")).toBe(false);
     expect(allowBridgePath("/api/snapshots")).toBe(false);
     expect(allowBridgePath("/api/panes")).toBe(false);
@@ -52,6 +56,8 @@ describe("proxyTargetUrl", () => {
     expect(proxyTargetUrl("/lite/api/pane/w1:p2/history?limit=60&before=abc", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w1:p2/history?limit=60&before=abc`,
     );
+    expect(proxyTargetUrl("/lite/api/launchers", cfg)).toBe(`${cfg.bridgeOrigin}/api/launchers`);
+    expect(proxyTargetUrl("/lite/api/launch", cfg, "POST")).toBe(`${cfg.bridgeOrigin}/api/launch`);
     expect(proxyTargetUrl("/lite/api/pane/w5N%3Ap1/history", cfg)).toBe(
       `${cfg.bridgeOrigin}/api/pane/w5N:p1/history`,
     );
@@ -118,6 +124,40 @@ describe("proxyTargetUrl", () => {
       expect(response.status).toBe(404);
     }
     expect(calls).toBe(0);
+  });
+
+  test("POST launch forwards the exact JSON body to the exact bridge route", async () => {
+    const body = '{"command":"bun test --watch","paneId":"w1:p2"}';
+    const forwarded: Array<{ url: string; method: string; body: string }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      forwarded.push({ url: String(input), method: init?.method ?? "", body: await new Response(init?.body).text() });
+      return Response.json({ ok: true, pane: { paneId: "w2:p1" } });
+    };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/launch", {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    }), cfg, fetcher);
+    expect(response.status).toBe(200);
+    expect(forwarded).toEqual([{ url: `${cfg.bridgeOrigin}/api/launch`, method: "POST", body }]);
+  });
+
+  test("POST launch reports timeout as an explicit unknown task outcome", async () => {
+    const fetcher = async () => { throw new DOMException("timed out", "TimeoutError"); };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/launch", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"command":"bun test"}',
+    }), cfg, fetcher);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({
+      ok: false, error: "Launch timed out; task status is unknown", code: "launch.timeout",
+    });
+  });
+
+  test("POST launch returns an explicit structured bridge failure", async () => {
+    const fetcher = async () => { throw new Error("offline"); };
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/launch", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"command":"bun test"}',
+    }), cfg, fetcher);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ ok: false, error: "Bridge unavailable", code: "bridge.unavailable" });
   });
 
   test("POST reply forwards the exact validated URL and raw JSON body", async () => {

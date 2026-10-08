@@ -1,6 +1,6 @@
 /**
  * The /api/* wiring decision (ADR-0005) as code: the daemon re-proxies a narrow allowlist of
- * bridge endpoints, including the single user-reply write route, so the browser only talks to its own origin.
+ * bridge endpoints, including user reply and launcher writes, so the browser only talks to its own origin.
  *
  * The browser asks `/lite/api/...` (base-relative from the SPA) → tailscale forwards the full
  * path to the daemon → the daemon checks its own access gate → fetches the allowlisted bridge
@@ -15,14 +15,16 @@ export const BROWSER_API_PREFIX = "/lite/api/";
 export type BridgeFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
- * The narrow allowlist admits the snapshot/history read routes and only POST to pane reply.
- * Every other write/action is refused here rather than forwarded. The pane suffix check comes
- * before anything else, so a longer, wronger path can never inherit an allowlisted prefix's verdict.
+ * The narrow allowlist admits snapshot/history/launchers reads and POST to pane reply or launch.
+ * Every other write/action is refused here rather than forwarded. Exact route matching prevents a
+ * longer, wronger path from inheriting an allowlisted prefix's verdict.
  */
 const SAFE_PANE_ID = /^[A-Za-z0-9._~:-]{1,128}$/;
+const LAUNCH_TIMEOUT_MS = 60_000;
 
 export function allowBridgePath(bridgePath: string, method = "GET"): boolean {
-  if (method === "GET" && bridgePath === "/api/snapshot") return true;
+  if (method === "GET" && ["/api/snapshot", "/api/launchers"].includes(bridgePath)) return true;
+  if (bridgePath === "/api/launch") return method === "POST";
   const action = bridgePath.match(/^\/api\/pane\/([^/]+)\/(history|reply)$/);
   if (!action || (action[2] === "history" ? method !== "GET" : method !== "POST")) return false;
   const paneId = action[1]!;
@@ -67,8 +69,8 @@ export function proxyTargetUrl(pathWithQuery: string, cfg: DaemonConfig, method 
   }
 
   let bridgePath: string;
-  if (incoming.pathname === "/lite/api/snapshot") {
-    bridgePath = "/api/snapshot";
+  if (["/lite/api/snapshot", "/lite/api/launchers", "/lite/api/launch"].includes(incoming.pathname)) {
+    bridgePath = incoming.pathname.slice("/lite".length);
   } else {
     const pane = incoming.pathname.match(/^\/lite\/api\/pane\/([^/]+)\/(history|reply)$/);
     if (!pane) throw new Error(`not a proxyable path: ${pathWithQuery}`);
@@ -123,14 +125,26 @@ export async function proxyBridgeRequest(
 
   try {
     const body = req.method === "POST" ? await req.arrayBuffer() : undefined;
-    const upstream = await fetcher(target, { method: req.method, headers, body, redirect: "manual" });
+    const signal = url.pathname === `${BROWSER_API_PREFIX}launch` ? AbortSignal.timeout(LAUNCH_TIMEOUT_MS) : undefined;
+    const upstream = await fetcher(target, { method: req.method, headers, body, redirect: "manual", signal });
     const responseHeaders = new Headers();
     for (const name of ["content-type", "cache-control", "etag"]) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
-  } catch {
+  } catch (error) {
+    if (url.pathname === `${BROWSER_API_PREFIX}launch`) {
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      return Response.json(
+        {
+          ok: false,
+          error: timedOut ? "Launch timed out; task status is unknown" : "Bridge unavailable",
+          code: timedOut ? "launch.timeout" : "bridge.unavailable",
+        },
+        { status: timedOut ? 504 : 502 },
+      );
+    }
     return new Response("bridge unavailable\n", { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
   }
 }

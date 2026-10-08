@@ -1,4 +1,4 @@
-import type { PaneHistoryResponse, SnapshotResponse } from "@homeling/contracts";
+import type { CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, SnapshotResponse } from "@homeling/contracts";
 
 const API_PREFIX = `${import.meta.env.BASE_URL || "/lite/"}api/`;
 
@@ -14,6 +14,40 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 /** Same-origin daemon reverse proxy; the browser never connects to Collie's :8787. */
 export function fetchSnapshot(signal?: AbortSignal): Promise<SnapshotResponse> {
   return getJson("snapshot", signal);
+}
+
+export function fetchLaunchers(signal?: AbortSignal): Promise<LaunchersResponse> {
+  return getJson("launchers", signal);
+}
+
+export class LaunchRequestError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+    this.name = "LaunchRequestError";
+  }
+}
+
+/** The daemon re-proxies Collie's launch endpoint; a task exists only after its pane id is returned. */
+export async function launchTask(launcher: Launcher, paneId?: string): Promise<Extract<CreateResponse, { ok: true }>> {
+  const body = paneId === undefined
+    ? { command: launcher.command }
+    : { command: launcher.command, paneId };
+  const response = await fetch(`${API_PREFIX}launch`, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let result: CreateResponse | null = null;
+  try {
+    result = await response.json() as CreateResponse;
+  } catch {
+    // Preserve a useful HTTP-level error when the bridge is unavailable or returned plain text.
+  }
+  if (!response.ok || result?.ok !== true || !result.pane?.paneId) {
+    const failure = result && !result.ok ? result : null;
+    throw new LaunchRequestError(failure?.error ?? `Launch failed (${response.status})`, failure?.code);
+  }
+  return result;
 }
 
 export function fetchPaneHistory(paneId: string, signal?: AbortSignal, before?: string): Promise<PaneHistoryResponse> {

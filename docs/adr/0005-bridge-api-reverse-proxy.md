@@ -14,9 +14,11 @@ status: accepted
 
 - `GET /api/snapshot`
 - `GET /api/pane/:id/history`
-- `POST /api/pane/:id/reply`（唯一写路由）
+- `GET /api/launchers`
+- `POST /api/pane/:id/reply`
+- `POST /api/launch`（两条写路由）
 
-`history` 的 `limit`、`before` 等 query 原样传递。路径解码/遍历、非白名单路由、其他 HTTP 方法均拒绝；不代理 Collie `/chat`、其他写接口或未来新增的 bridge API。POST 继续经过 daemon `checkAccess` 的 Host、Origin、身份校验；只有直接 loopback peer 且 loopback Host 才允许无 Origin，Tailscale Serve 的 loopback 代理 peer 不视为本机。非 loopback POST 必须携带与配置 Tailscale HTTPS origin 完全匹配的 Origin。透传已验证的 `Tailscale-User-Login`，保留 bridge 自身的鉴权门。daemon 与 bridge 仍只监听 loopback。
+`history` 的 `limit`、`before` 等 query 原样传递。launch body 原样转发；客户端只提交 `launchers.toml` 中精确匹配的 `command`，以及可选的 `paneId`。路径解码/遍历、非白名单路由、其他 HTTP 方法均拒绝；不代理 Collie `/chat`、其他写接口或未来新增的 bridge API。POST 继续经过 daemon `checkAccess` 的 Host、Origin、身份校验；只有直接 loopback peer 且 loopback Host 才允许无 Origin，Tailscale Serve 的 loopback 代理 peer 不视为本机。非 loopback POST 必须携带与配置 Tailscale HTTPS origin 完全匹配的 Origin，且 body 必须为 `application/json`。透传已验证的 `Tailscale-User-Login`，保留 bridge 自身的鉴权门。daemon 与 bridge 仍只监听 loopback。Launch 请求有 60 秒代理等待超时，超时以结构化 `launch.timeout` 返回，客户端不创建 task chip。Collie launch 不响应取消，因此超时不代表 pane 已回滚；没有可靠关联 pane 前 daemon 不做 snapshot 差分猜测或自动 close，超时残留需人工真机验收。
 
 ## 送达边界（ticket #4）
 
