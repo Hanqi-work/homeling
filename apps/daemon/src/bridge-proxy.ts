@@ -16,10 +16,10 @@ export type BridgeFetch = (input: RequestInfo | URL, init?: RequestInit) => Prom
 
 /**
  * The narrow allowlist admits snapshot/pane/history/launcher reads, POST to pane reply or launch,
- * and internal POST keys. Direct browser key writes are blocked in `proxyBridgeRequest` below.
+ * and internal POST keys. Browser key writes are blocked except for the fixed Ctrl-C stop semantic route.
  */
 const SAFE_PANE_ID = /^[A-Za-z0-9._~:-]{1,128}$/;
-const RESERVED_PANE_SEGMENTS = new Set(["history", "reply", "keys"]);
+const RESERVED_PANE_SEGMENTS = new Set(["history", "reply", "keys", "stop"]);
 const LAUNCH_TIMEOUT_MS = 60_000;
 
 export function allowBridgePath(bridgePath: string, method = "GET"): boolean {
@@ -72,7 +72,15 @@ export function proxyTargetUrl(pathWithQuery: string, cfg: DaemonConfig, method 
   }
 
   let bridgePath: string;
-  if (["/lite/api/snapshot", "/lite/api/launchers", "/lite/api/launch"].includes(incoming.pathname)) {
+  const stopRoute = incoming.pathname.match(/^\/lite\/api\/pane\/([^/]+)\/stop$/);
+  if (stopRoute) {
+    if (method !== "POST" || incoming.search) throw new Error(`not a proxyable path: ${pathWithQuery}`);
+    const paneId = decodeURIComponent(stopRoute[1]!);
+    if (/[\\/#?%]/.test(paneId) || paneId.includes("..") || RESERVED_PANE_SEGMENTS.has(paneId) || !SAFE_PANE_ID.test(paneId)) {
+      throw new Error(`not a proxyable path: ${pathWithQuery}`);
+    }
+    bridgePath = `/api/pane/${paneId}/keys`;
+  } else if (["/lite/api/snapshot", "/lite/api/launchers", "/lite/api/launch"].includes(incoming.pathname)) {
     bridgePath = incoming.pathname.slice("/lite".length);
   } else {
     const pane = incoming.pathname.match(/^\/lite\/api\/pane\/([^/]+)(?:\/(history|reply|keys))?$/);
@@ -110,9 +118,9 @@ export async function proxyBridgeRequest(
     return new Response("not found\n", { status: 404 });
   }
 
-  // The key writer is intentionally not a browser proxy route. Requests reach it only through the
-  // daemon's request-id approval handler, which owns the option mapping and race binding.
-  if (req.method === "POST" && /\/api\/pane\/[^/]+\/keys$/.test(new URL(target).pathname)) {
+  const isStopRoute = /^\/lite\/api\/pane\/[^/]+\/stop$/.test(url.pathname);
+  // Arbitrary browser key writes remain blocked; stop is a fixed server-authored Ctrl-C action.
+  if (req.method === "POST" && /\/api\/pane\/[^/]+\/keys$/.test(new URL(target).pathname) && !isStopRoute) {
     return new Response("not found\n", { status: 404 });
   }
 
@@ -133,7 +141,11 @@ export async function proxyBridgeRequest(
   if (contentType) headers.set("content-type", contentType);
 
   try {
-    const body = req.method === "POST" ? await req.arrayBuffer() : undefined;
+    const body = req.method !== "POST"
+      ? undefined
+      : isStopRoute
+        ? new TextEncoder().encode('{"keys":["ctrl+c"]}')
+        : await req.arrayBuffer();
     const signal = url.pathname === `${BROWSER_API_PREFIX}launch` ? AbortSignal.timeout(LAUNCH_TIMEOUT_MS) : undefined;
     const upstream = await fetcher(target, { method: req.method, headers, body, redirect: "manual", signal });
     const responseHeaders = new Headers();

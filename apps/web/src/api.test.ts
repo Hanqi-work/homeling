@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchLaunchers, launchTask, sendPaneReply } from "./api.ts";
+import { fetchLaunchers, fetchPaneScreen, launchTask, sendPaneReply, stopPaneTask } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -32,6 +32,28 @@ describe("task launch API", () => {
       message: "Command is not allowlisted",
       code: "launch.not_allowlisted",
     });
+  });
+});
+
+describe("task detail APIs", () => {
+  test("reads the current pane screen over the same-origin daemon API", async () => {
+    let url = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      url = String(input);
+      return Response.json({ paneId: "w1:p2", text: "screen", truncated: false });
+    }) as unknown as typeof fetch;
+    await expect(fetchPaneScreen("w1:p2")).resolves.toMatchObject({ text: "screen" });
+    expect(url).toBe("/lite/api/pane/w1%3Ap2");
+  });
+
+  test("posts a semantic stop request without accepting caller-supplied keys", async () => {
+    const requests: Array<{ url: string; method: string; body: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), method: init?.method ?? "", body: String(init?.body) });
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    await stopPaneTask("w1:p2");
+    expect(requests).toEqual([{ url: "/lite/api/pane/w1%3Ap2/stop", method: "POST", body: "{}" }]);
   });
 });
 
