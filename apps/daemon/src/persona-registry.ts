@@ -30,14 +30,25 @@ const EMPTY: RegistryFile = { version: 1, personas: [], archivedSpaces: [], orph
 
 export class PersonaRegistry {
   private current: RegistryFile | null = null;
+  private loading: Promise<RegistryFile> | null = null;
   private writeTail: Promise<void> = Promise.resolve();
 
-  constructor(readonly path: string) {}
+  constructor(
+    readonly path: string,
+    private readonly readRegistry: (path: string) => Promise<string> = (path) => readFile(path, "utf8"),
+  ) {}
 
   async load(): Promise<RegistryFile> {
     if (this.current) return this.current;
+    if (!this.loading) this.loading = this.readInitialRegistry();
+    const loading = this.loading;
+    try { return await loading; }
+    finally { if (this.loading === loading) this.loading = null; }
+  }
+
+  private async readInitialRegistry(): Promise<RegistryFile> {
     try {
-      const parsed = JSON.parse(await readFile(this.path, "utf8")) as Partial<RegistryFile>;
+      const parsed = JSON.parse(await this.readRegistry(this.path)) as Partial<RegistryFile>;
       if (parsed.version !== 1 || !Array.isArray(parsed.personas)) throw new Error("unsupported registry format");
       this.current = {
         version: 1,

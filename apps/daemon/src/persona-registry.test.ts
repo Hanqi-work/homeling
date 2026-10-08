@@ -22,6 +22,51 @@ function persona(id: string): Persona {
 }
 
 describe("PersonaRegistry", () => {
+  test("does not lose a committed creation when an older cold disk read arrives late", async () => {
+    const { path, registry } = await fixture();
+    await registry.createPersona(persona("a"));
+    const initialFile = await readFile(path, "utf8");
+    let release!: () => void;
+    let firstReadStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstReadStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let first = true;
+    const cold = new PersonaRegistry(path, async () => {
+      if (first) { first = false; firstReadStarted(); await gate; }
+      return initialFile;
+    });
+    const loading = cold.load();
+    await started;
+    const creating = cold.createPersona(persona("b"));
+    // Allow an incorrectly independent read to commit first; a shared cold read stays gated.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([creating, new Promise<void>((resolve) => { timer = setTimeout(resolve, 100); })]);
+    clearTimeout(timer);
+    release();
+    await Promise.all([loading, creating]);
+    await cold.patchPersona("a", { paused: true });
+    expect((await cold.list()).map((item) => item.id).sort()).toEqual(["a", "b"]);
+    expect((await new PersonaRegistry(path).list()).map((item) => item.id).sort()).toEqual(["a", "b"]);
+  });
+
+  test("merges concurrent field patches and never resurrects a removed persona", async () => {
+    const { registry } = await fixture();
+    await registry.createPersona(persona("a"));
+    await Promise.all([
+      registry.patchPersona("a", { name: "Renamed" }),
+      registry.patchPersona("a", { mainPaneId: "replacement-pane", systemPromptInjected: false }),
+      registry.patchPersona("a", { avatar: { color: "#93c5fd" } }),
+    ]);
+    expect(await registry.get("a")).toMatchObject({
+      name: "Renamed", mainPaneId: "replacement-pane", systemPromptInjected: false, avatar: { color: "#93c5fd" },
+    });
+    await Promise.all([
+      registry.removePersona("a", { spaceId: "space-a", personaName: "Renamed", archivedAt: "2026-10-08T01:00:00Z" }),
+      registry.patchPersona("a", { systemPromptInjected: true }),
+    ]);
+    expect(await registry.get("a")).toBeUndefined();
+    expect(await registry.list()).toEqual([]);
+  });
   test("persists CRUD atomically and restores records after a new registry instance", async () => {
     const { path, registry } = await fixture();
     await Promise.all([registry.createPersona(persona("a")), registry.createPersona(persona("b"))]);

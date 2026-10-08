@@ -421,7 +421,7 @@ function PaneConversation({ paneId, personaId }: PaneConversationProps): ReactEl
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
             {visibleTasks.length > 0 ? (
               <ul aria-label="任务" className="mt-2 flex flex-col gap-2">
-                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={`/p/${encodeURIComponent(paneId)}`} />)}
+                {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={personaId ? `/persona/${encodeURIComponent(personaId)}` : `/p/${encodeURIComponent(paneId)}`} />)}
               </ul>
             ) : null}
           </ThreadPrimitive.Viewport>
@@ -471,7 +471,6 @@ export function ConversationPage(): ReactElement {
         setPersonaLookupError(current ? null : "Persona not found");
       } catch (error: unknown) {
         if (!signal.aborted) {
-          setPersona(null);
           setPersonaLookupError(error instanceof Error ? error.message : "Unable to resolve persona");
         }
       }
@@ -485,10 +484,13 @@ export function ConversationPage(): ReactElement {
         {personaLookupError ?? "Restoring persona conversation…"}
       </main>;
     }
-    if (routePaneIdValue !== persona.mainPaneId) {
-      return <Navigate to={`/persona/${encodeURIComponent(personaId)}/p/${encodeURIComponent(persona.mainPaneId)}`} replace />;
+    if (routePaneIdValue) {
+      return <Navigate to={`/persona/${encodeURIComponent(personaId)}`} replace />;
     }
-    return <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} />;
+    return <>
+      {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
+      <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} />
+    </>;
   }
 
   if (!routePaneIdValue) return <main className="p-6 text-sm">pane id missing</main>;

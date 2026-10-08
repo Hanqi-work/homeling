@@ -19,8 +19,10 @@ interface MemoryState {
   closed: string[];
   eventStreams: Socket[];
   startedAgents: Set<string>;
+  agentStatus: string;
   actions: string[];
   paneReads: number;
+  readScreens: string[];
   failSendKeys: boolean;
 }
 
@@ -68,7 +70,7 @@ async function memoryHerdr(root: string, state: MemoryState): Promise<string> {
       } else if (request.method === "tab.create") {
         const workspaceId = String(p.workspace_id);
         const tabNo = state.tabs.filter((tab) => tab.workspace_id === workspaceId).length + 1;
-        const paneNo = Math.max(0, ...state.panes.filter((item) => item.workspace_id === workspaceId).map((item) => Number(item.pane_id.split(":p")[1]))) + 1;
+        const paneNo = tabNo;
         const createdPane = pane(workspaceId, paneNo, tabNo, typeof p.cwd === "string" ? p.cwd : "/home/test");
         state.tabs.push({ tab_id: createdPane.tab_id, workspace_id: workspaceId });
         state.panes.push(createdPane);
@@ -80,7 +82,7 @@ async function memoryHerdr(root: string, state: MemoryState): Promise<string> {
       } else if (request.method === "pane.read") {
         state.paneReads += 1;
         state.actions.push("pane_read");
-        reply({ type: "pane_read", read: { text: "$ ", truncated: false, revision: 1 } });
+        reply({ type: "pane_read", read: { text: state.readScreens.shift() ?? "$ ", truncated: false, revision: 1 } });
       } else if (request.method === "pane.send_keys") {
         state.actions.push("send_keys");
         const paneId = String(p.pane_id);
@@ -106,7 +108,7 @@ async function memoryHerdr(root: string, state: MemoryState): Promise<string> {
           workspaces: state.workspaces,
           tabs: state.tabs,
           panes: state.panes,
-          agents: state.panes.filter((item) => state.startedAgents.has(item.pane_id)).map((item) => ({ pane_id: item.pane_id, status: "working" })),
+          agents: state.panes.filter((item) => state.startedAgents.has(item.pane_id)).map((item) => ({ pane_id: item.pane_id, agent_status: state.agentStatus })),
 
         } });
       } else if (request.method === "events.subscribe") {
@@ -134,7 +136,7 @@ async function memoryHerdr(root: string, state: MemoryState): Promise<string> {
 async function fixture(options: { failSendKeys?: boolean; failFirstReplyPartial?: boolean; launchers?: Array<{ command: string; label: string; cwd?: string }> } = {}) {
   const root = await mkdtemp(join(tmpdir(), "homeling-persona-"));
   roots.push(root);
-  const state: MemoryState = { workspaces: [], tabs: [], panes: [], text: [], keys: [], closed: [], eventStreams: [], startedAgents: new Set(), actions: [], paneReads: 0, failSendKeys: options.failSendKeys ?? false };
+  const state: MemoryState = { workspaces: [], tabs: [], panes: [], text: [], keys: [], closed: [], eventStreams: [], startedAgents: new Set(), agentStatus: "working", actions: [], paneReads: 0, readScreens: [], failSendKeys: options.failSendKeys ?? false };
   const socketPath = await memoryHerdr(root, state);
   let launcherRows = options.launchers ?? [{ command: "agent --start", label: "Agent", cwd: "/home/test" }];
   let failNextPartialReply = options.failFirstReplyPartial ?? false;
@@ -209,6 +211,11 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
 
     const listed = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
     expect((await listed.json() as { personas: Array<{ status: string }> }).personas[0]?.status).toBe("thinking");
+    for (const [wireStatus, expected] of [["blocked", "blocked"], ["idle", "idle"], ["done", "idle"]]) {
+      state.agentStatus = wireStatus!;
+      const statusResponse = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
+      expect((await statusResponse.json() as { personas: Array<{ status: string }> }).personas[0]?.status).toBe(expected);
+    }
 
     state.panes = state.panes.filter((item) => item.pane_id !== persona.mainPaneId);
     const recoveredList = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
@@ -225,6 +232,87 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     const recoveredHistory = await handleRequest(request("/lite/api/pane/w1%3Ap3/history"), cfg, fetcher, runtime);
     expect(recoveredHistory.status).toBe(404);
     expect(bridgeCalls).toContain(`${cfg.bridgeOrigin}/api/pane/w1:p3/history`);
+  });
+
+  test("waits for stable nonempty shell output for creation, task launch, and pane recovery", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    state.readScreens = ["", "Starting shell", "$ ", "$ "];
+    const created = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json",
+      body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }),
+    }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string; mainPaneId: string } };
+    expect(created.status).toBe(201);
+    expect(state.actions.slice(0, 5)).toEqual(["pane_read", "pane_read", "pane_read", "pane_read", "send_text"]);
+    state.actions = [];
+    state.readScreens = ["", "Starting shell", "$ ", "$ "];
+    const task = await handleRequest(request("/lite/api/launch", {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ command: "agent --start", personaId: persona.id }),
+    }), cfg, fetcher, runtime);
+    expect(task.status).toBe(200);
+    expect(state.actions.slice(0, 5)).toEqual(["pane_read", "pane_read", "pane_read", "pane_read", "send_text"]);
+    state.actions = [];
+    state.readScreens = ["", "Starting shell", "$ ", "$ "];
+    state.panes = state.panes.filter((item) => item.pane_id !== persona.mainPaneId);
+    await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, runtime);
+    expect(state.actions.filter((action) => action !== "snapshot").slice(0, 5)).toEqual(["pane_read", "pane_read", "pane_read", "pane_read", "send_text"]);
+  });
+
+  test("restores persisted associations after daemon restart without adopting unrelated spaces", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json",
+      body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }),
+    }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    state.workspaces.push({ workspace_id: "collie-existing", label: "Unrelated" });
+    const restarted: PersonaRuntime = {
+      ...runtime, registry: new PersonaRegistry(cfg.registryPath),
+      herdr: new HerdrSocketClient({ socketPath: cfg.herdrSocketPath }),
+    };
+    const listed = await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, restarted);
+    expect(await listed.json()).toMatchObject({ personas: [{ id: persona.id, spaceId: "w1", mainPaneId: "w1:p1" }] });
+    expect(await restarted.registry.list()).toHaveLength(1);
+    expect(state.text).toEqual([{ paneId: "w1:p1", text: "agent --start" }]);
+
+    state.panes = [];
+    await handleRequest(request("/lite/api/persona/list"), cfg, fetcher, restarted);
+    expect(await restarted.registry.get(persona.id)).toMatchObject({ spaceId: "w1", mainPaneId: "w1:p2", systemPromptInjected: false });
+    expect(state.tabs.at(-1)?.workspace_id).toBe("w1");
+    expect(state.workspaces.find((space) => space.workspace_id === "collie-existing")?.label).toBe("Unrelated");
+  });
+
+  test("keeps disjoint PATCH fields and the injection marker while a message is in flight", async () => {
+    const { cfg, fetcher, runtime } = await fixture();
+    const created = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json",
+      body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" }, systemPrompt: "Be concise." }),
+    }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const delayedRuntime: PersonaRuntime = { ...runtime, fetcher: async (input, init) => {
+      if (String(input).endsWith("/reply")) { markStarted(); await gate; }
+      return fetcher(input, init);
+    } };
+    const sending = handleRequest(request(`/lite/api/persona/${persona.id}/message`, {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ text: "Hello" }),
+    }), cfg, delayedRuntime.fetcher, delayedRuntime);
+    await started;
+    const rename = handleRequest(request(`/lite/api/persona/${persona.id}`, {
+      method: "PATCH", contentType: "application/json", body: JSON.stringify({ name: "Mira Two" }),
+    }), cfg, delayedRuntime.fetcher, delayedRuntime);
+    const recolor = handleRequest(request(`/lite/api/persona/${persona.id}`, {
+      method: "PATCH", contentType: "application/json", body: JSON.stringify({ avatar: { color: "#93c5fd" } }),
+    }), cfg, delayedRuntime.fetcher, delayedRuntime);
+    release();
+    const responses = await Promise.all([sending, rename, recolor]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(await runtime.registry.get(persona.id)).toMatchObject({
+      name: "Mira Two", avatar: { color: "#93c5fd" }, systemPromptInjected: true, mainPaneId: "w1:p1",
+    });
   });
 
   test("keeps transcript confirmation text after a first-message partial submit failure", async () => {
@@ -265,6 +353,31 @@ describe("persona creation loop over an in-memory Herdr socket", () => {
     expect(recovered).toMatchObject({ mainPaneId: "w1:p1", launcherCommand: "agent --start", needsAttention: "launcher_not_allowlisted" });
     expect(state.text).toEqual([{ paneId: "w1:p1", text: "agent --start" }]);
     expect(state.panes).toEqual([]);
+  });
+
+  test("rejects unlisted launchers before allocation and rolls back a failed owned task", async () => {
+    const { cfg, state, fetcher, runtime } = await fixture();
+    const rejected = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json",
+      body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" }, launcherCommand: "arbitrary-command" }),
+    }), cfg, fetcher, runtime);
+    expect(rejected.status).toBe(502);
+    expect(state.workspaces).toEqual([]);
+    expect(await runtime.registry.list()).toEqual([]);
+    const created = await handleRequest(request("/lite/api/persona", {
+      method: "POST", contentType: "application/json",
+      body: JSON.stringify({ name: "Mira", avatar: { color: "#86efac" } }),
+    }), cfg, fetcher, runtime);
+    const { persona } = await created.json() as { persona: { id: string } };
+    state.failSendKeys = true;
+    const failed = await handleRequest(request("/lite/api/launch", {
+      method: "POST", contentType: "application/json", body: JSON.stringify({ command: "agent --start", personaId: persona.id }),
+    }), cfg, fetcher, runtime);
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ ok: false });
+    expect(state.closed).toEqual(["w1:p2"]);
+    expect(state.panes.map((item) => item.pane_id)).toEqual(["w1:p1"]);
+    expect(await runtime.registry.list()).toHaveLength(1);
   });
 
   test("returns a structured Herdr-unavailable error and records unknown create outcome", async () => {

@@ -44,7 +44,7 @@ function safeId(id: string): boolean {
 function statusOf(persona: Persona, snapshot: HerdrSnapshot): "thinking" | "active" | "idle" | "blocked" {
   if (persona.paused) return "idle";
   const agent = snapshot.agents.find((item) => item.pane_id === persona.mainPaneId);
-  const status = agent?.status;
+  const status = agent?.agent_status;
   if (status === "blocked") return "blocked";
   if (status === "working") return "thinking";
   if (status === "idle" || status === "done") return "idle";

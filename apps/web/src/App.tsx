@@ -4,6 +4,21 @@ import { Link } from "react-router";
 import { createPersona, fetchPersonas, fetchSnapshot } from "./api.ts";
 import { startSerialPolling } from "./polling.ts";
 
+export function PersonaLink({ persona }: { persona: PersonaView }) {
+  return (
+    <Link
+      to={`/persona/${encodeURIComponent(persona.id)}`}
+      className="flex min-h-16 items-center gap-3 rounded-2xl bg-neutral-900 px-4 py-3 transition-colors hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300"
+    >
+      <span aria-hidden="true" className="size-10 shrink-0 rounded-full ring-2 ring-white/10" style={{ backgroundColor: persona.avatar.color }} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{persona.name}</span>
+        <span className="block text-sm capitalize text-neutral-400">{persona.needsAttention ? "needs attention" : persona.paused ? "paused" : persona.status}</span>
+      </span>
+    </Link>
+  );
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,16 +101,7 @@ export function App() {
           <ul className="mb-4 flex flex-col gap-2">
             {personas.map((persona) => (
               <li key={persona.id}>
-                <Link
-                  to={`/persona/${encodeURIComponent(persona.id)}/p/${encodeURIComponent(persona.mainPaneId)}`}
-                  className="flex min-h-16 items-center gap-3 rounded-2xl bg-neutral-900 px-4 py-3 transition-colors hover:bg-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300"
-                >
-                  <span aria-hidden="true" className="size-10 shrink-0 rounded-full ring-2 ring-white/10" style={{ backgroundColor: persona.avatar.color }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{persona.name}</span>
-                    <span className="block text-sm capitalize text-neutral-400">{persona.needsAttention ? "needs attention" : persona.paused ? "paused" : persona.status}</span>
-                  </span>
-                </Link>
+                <PersonaLink persona={persona} />
               </li>
             ))}
           </ul>

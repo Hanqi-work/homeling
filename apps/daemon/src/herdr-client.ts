@@ -26,7 +26,7 @@ export interface HerdrSnapshot {
   readonly workspaces: readonly { readonly workspace_id: string; readonly label: string }[];
   readonly tabs: readonly { readonly tab_id: string; readonly workspace_id: string }[];
   readonly panes: readonly HerdrPane[];
-  readonly agents: readonly { readonly pane_id: string; readonly status?: string }[];
+  readonly agents: readonly { readonly pane_id: string; readonly agent_status?: string }[];
 }
 
 export interface HerdrClientOptions {
