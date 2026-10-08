@@ -6,6 +6,21 @@ const kinds: MemoryKind[] = ["facts", "preferences", "project"];
 const labels: Record<MemoryKind, string> = { facts: "事实", preferences: "偏好", project: "项目笔记" };
 const buttonClass = "min-h-12 min-w-12 rounded-xl border border-neutral-600 px-4 py-3 text-base text-white disabled:opacity-50";
 
+function mergeDrafts(
+  current: Record<MemoryKind, string>,
+  previous: PersonaMemory | null,
+  next: PersonaMemory,
+  savedKind?: MemoryKind,
+): Record<MemoryKind, string> {
+  const updated = { ...current };
+  for (const kind of kinds) {
+    if (kind === savedKind || !previous || current[kind] === previous.documents[kind].content) {
+      updated[kind] = next.documents[kind].content;
+    }
+  }
+  return updated;
+}
+
 export function PersonaMemoryEditor(props: PersonaMemoryEditorProps): ReactElement {
   return <MemoryEditor key={props.personaId} {...props} />;
 }
@@ -30,13 +45,7 @@ function MemoryEditor({ personaId, fetcher = fetch }: PersonaMemoryEditorProps):
     try {
       const next = await getPersonaMemory(personaId, fetcherRef.current);
       if (token !== generation.current) return;
-      setDrafts((current) => {
-        const updated = { ...current };
-        for (const kind of kinds) {
-          if (!previous || current[kind] === previous.documents[kind].content) updated[kind] = next.documents[kind].content;
-        }
-        return updated;
-      });
+      setDrafts((current) => mergeDrafts(current, previous, next));
       setMemory(next);
       unknownSave.current = false;
       transition("ready");
@@ -71,13 +80,7 @@ function MemoryEditor({ personaId, fetcher = fetch }: PersonaMemoryEditorProps):
       const next = await putPersonaMemory(personaId, { kind, content: drafts[kind], revision: memory.documents[kind].revision }, fetcherRef.current);
       if (token !== generation.current) return;
       setMemory(next);
-      setDrafts((current) => {
-        const updated = { ...current };
-        for (const documentKind of kinds) {
-          if (documentKind === kind || current[documentKind] === memory.documents[documentKind].content) updated[documentKind] = next.documents[documentKind].content;
-        }
-        return updated;
-      });
+      setDrafts((current) => mergeDrafts(current, memory, next, kind));
       transition("ready");
       setMessage("已保存，下次会话生效。");
     } catch (error) {

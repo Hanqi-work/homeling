@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, realpath, rm, mkdir, symlink, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PersonaMemoryStore } from "./persona-memory.ts";
 import { SessionLock } from "./session-lock.ts";
@@ -18,6 +18,12 @@ async function fixture() {
   roots.push(root);
   return join(root, "memory");
 }
+
+test("configuration cannot direct memory into the known Collie installation or an undedicated root", () => {
+  expect(() => new PersonaMemoryStore(join(homedir(), ".local", "share", "collie", "memory"))).toThrow("Collie");
+  expect(() => new PersonaMemoryStore(homedir())).toThrow("dedicated");
+  expect(() => new PersonaMemoryStore("/")).toThrow("dedicated");
+});
 
 test("Markdown facts survive store restart without changing another persona", async () => {
   const root = await fixture();

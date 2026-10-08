@@ -1,6 +1,7 @@
 import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, parse, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import type { MutationAdmission } from "./session-lock.ts";
 
 export const MEMORY_KINDS = ["facts", "preferences", "project"] as const;
@@ -36,12 +37,24 @@ function encode(content: string, maxBytes = MEMORY_MAX_BYTES): Buffer {
   return bytes;
 }
 
+function writeExclusiveFile(path: string, bytes: Uint8Array): void {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Fixed Markdown names, owner-only storage, strict UTF-8, optimistic concurrency, atomic replacement. */
 export class PersonaMemoryStore {
   readonly root: string;
   constructor(root: string) {
-    if (!isAbsolute(root) || resolve(root) === parse(root).root) fail("Memory root must be a dedicated absolute directory");
+    if (!isAbsolute(root) || resolve(root) === parse(root).root || resolve(root) === homedir()) fail("Memory root must be a dedicated absolute directory");
     this.root = resolve(root);
+    const collie = join(homedir(), ".local", "share", "collie").toLowerCase();
+    if (this.root.toLowerCase() === collie || this.root.toLowerCase().startsWith(`${collie}${sep}`)) fail("Memory must not use the Collie installation");
   }
   private directory(id: string): string {
     checkId(id);
