@@ -27,23 +27,33 @@ export function createPushOutput(options: {
       const operation = tail.then(async () => {
         const report = { sent: 0, invalid: 0, failed: 0, suppressed: 0 };
         const state = await options.store.load();
-        if (!state.preferences.enabled || cancelled.has(payload.tag)) return { ...report, suppressed: state.subscriptions.length };
+        if (!state.preferences.enabled || state.retractTags.includes(payload.tag) || cancelled.has(payload.tag)) return { ...report, suppressed: state.subscriptions.length };
+        const invalidEndpoints: string[] = [];
         for (const subscription of state.subscriptions) {
           if (cancelled.has(payload.tag)) { report.suppressed++; continue; }
           const key = createHash('sha256').update(payload.occurrenceKey).update('\0').update(subscription.endpoint).digest('hex');
           if (state.deliveries[key] !== undefined) { report.suppressed++; continue; }
           const claimed = await options.store.mutate(current => {
-            if (!current.preferences.enabled || cancelled.has(payload.tag) || current.deliveries[key] !== undefined || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: false };
+            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || current.deliveries[key] !== undefined || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: false };
             return { next: { ...current, deliveries: { ...current.deliveries, [key]: options.clock.now() } }, result: true };
           }, options.admission);
           if (!claimed || cancelled.has(payload.tag)) { report.suppressed++; continue; }
-          // No await between last cancellation check and external dispatch registration.
-          let result: PushSendResult;
-          try { result = await options.admission.dispatch(() => options.transport.send(subscription, payload)); }
-          catch { result = { status: 'failed' }; }
+          // Claim is already durable. Register dispatch synchronously against current cancellation
+          // state in the same store queue as resolution, but don't hold that queue over network I/O.
+          const dispatched = await options.store.mutate(current => {
+            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: null };
+            let delivery: Promise<PushSendResult>;
+            try { delivery = options.admission.dispatch(() => options.transport.send(subscription, payload)); }
+            catch { delivery = Promise.resolve({ status: 'failed' }); }
+            return { next: current, result: { delivery: delivery.catch((): PushSendResult => ({ status: 'failed' })) } };
+          }, options.admission);
+          if (!dispatched) { report.suppressed++; continue; }
+          const result = await dispatched.delivery;
           report[result.status]++;
-          if (result.status === 'invalid') await removeInvalid(subscription.endpoint);
+          if (result.status === 'invalid') invalidEndpoints.push(subscription.endpoint);
         }
+        // Cleanup is admitted and errors remain observable, but never precedes healthy deliveries.
+        await Promise.all(invalidEndpoints.map(removeInvalid));
         return report;
       });
       tail = operation.catch(() => undefined);

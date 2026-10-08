@@ -1,30 +1,21 @@
 import type { ActivityResponse } from '@homeling/contracts';
-import type { PushOutput } from './push-output.ts';
+import type { PushClock, PushOutput } from './push-output.ts';
 import type { PushPersistence } from './push-store.ts';
-import { PendingPushLedger, type PendingPushObservation } from './push-pending.ts';
+import type { PendingPushObservation } from './push-pending.ts';
+import { PushCoordinator } from './push-coordinator.ts';
 import type { SystemAdmission } from './system-admission.ts';
 
 export interface PushActivityInput { list(personaId?: string, afterSequence?: number): Promise<ActivityResponse> }
 export class PushEventConsumer {
-  private readonly pending: PendingPushLedger;
+  private readonly coordinator: PushCoordinator;
   private activityTail: Promise<void> = Promise.resolve();
-  constructor(private readonly options: { store: PushPersistence; activity: PushActivityInput; registry: { get(id: string): Promise<{ name: string } | undefined> }; output: PushOutput; admission: SystemAdmission<'push.deliver'> }) {
-    this.pending = new PendingPushLedger(options.store, options.admission);
+  constructor(private readonly options: { store: PushPersistence; activity: PushActivityInput; registry: { get(id: string): Promise<{ name: string } | undefined> }; output: PushOutput; admission: SystemAdmission<'push.deliver'>; clock?: PushClock; debounceMs?: number }) {
+    this.coordinator = new PushCoordinator({ ...options, clock: options.clock ?? { now: Date.now } });
   }
-  async retainBindings(valid: ReadonlySet<string>): Promise<void> {
-    for (const event of await this.pending.retainBindings(valid)) await this.options.output.retract(event.tag);
-  }
-  async observePending(observations: readonly PendingPushObservation[]): Promise<void> {
-    for (const observation of observations) {
-      const event = await this.pending.observe(observation);
-      if (event?.supersededTag) await this.options.output.retract(event.supersededTag);
-      if (event?.state === 'resolved') await this.options.output.retract(event.tag);
-      if (event?.payload) {
-        // Don't block the next resolution observation on a slow push service.
-        void this.options.output.send(event.payload).catch(() => console.error('[homeling-daemon] push delivery persistence failed'));
-      }
-    }
-  }
+  retainBindings(valid: ReadonlySet<string>): Promise<void> { return this.coordinator.retainBindings(valid); }
+  observePending(observations: readonly PendingPushObservation[]): Promise<void> { return this.coordinator.observePending(observations); }
+  flushPending(): ReturnType<PushCoordinator['flush']> { return this.coordinator.flush(); }
+  stop(): void { this.coordinator.stop(); }
   drainActivity(): Promise<void> {
     const operation = this.activityTail.then(async () => {
       const cursor = (await this.options.store.load()).activityCursor;
