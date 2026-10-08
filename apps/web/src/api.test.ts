@@ -1,8 +1,30 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, transcribeAudio } from "./api.ts";
+import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+describe("control key API", () => {
+  test("posts a confirmed semantic action rather than text or raw keys", async () => {
+    let posted: unknown;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      posted = { url: String(input), body: JSON.parse(String(init?.body)) };
+      return Response.json({ outcome: "accepted" });
+    }) as typeof fetch;
+    expect(await sendPaneControlKey("w1:p2", "escape", "identity")).toEqual({ outcome: "accepted" });
+    expect(posted).toEqual({ url: "/lite/api/pane/w1%3Ap2/control-key", body: { action: "escape", identity: "identity", confirmed: true } });
+  });
+  test("network and malformed success are unknown; definite auth failure is not submitted; no retries", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; throw new Error("lost"); }) as unknown as typeof fetch;
+    expect((await sendPaneControlKey("p", "interrupt", "i")).outcome).toBe("unknown");
+    expect(calls).toBe(1);
+    globalThis.fetch = (async () => Response.json({ ok: true })) as unknown as typeof fetch;
+    expect((await sendPaneControlKey("p", "interrupt", "i")).outcome).toBe("unknown");
+    globalThis.fetch = (async () => new Response("identity required", { status: 401 })) as unknown as typeof fetch;
+    expect((await sendPaneControlKey("p", "interrupt", "i")).outcome).toBe("not-submitted");
+  });
+});
 
 describe("STT API", () => {
   test("uploads raw recorder bytes with cancellation and returns text without a reply call", async () => {
