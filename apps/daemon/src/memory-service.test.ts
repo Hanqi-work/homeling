@@ -7,6 +7,8 @@ import { PersonaMemoryStore } from "./persona-memory.ts";
 import { createPersona, recoverPersonas, sendPersonaMessage, type PersonaRuntime } from "./persona-service.ts";
 import type { HerdrPane, HerdrPort } from "./herdr-client.ts";
 import { SessionLock } from "./session-lock.ts";
+import { handleRequest } from "./index.ts";
+import { SessionController } from "./session-controller.ts";
 import { createDaemonSystemAdmissions } from "./system-admission.ts";
 
 const roots: string[] = [];
@@ -45,6 +47,32 @@ async function fixture(command: string) {
   const lock = new SessionLock(), { token } = lock.unlock("fixture"), admission = lock.admission(lock.admit(token, "fixture"));
   return { root, memory, runtime, lock, token, admission, texts, replies, removePane() { panes = []; }, onRead(hook: () => Promise<void>) { readHook = hook; }, onReply(hook: () => Promise<Response>) { replyHook = hook; } };
 }
+
+test("actual HTTP memory save requires a session, refuses bad Origin, and GET does not recover panes", async () => {
+  const f = await fixture("pi");
+  const persona = await createPersona(f.runtime, { name: "Mira", avatar: { color: "#86efac" } }, null, f.admission);
+  f.removePane();
+  const secret = "a".repeat(43);
+  const sessions = new SessionController({ verify: () => input => input === secret });
+  const cfg = { ...f.runtime.cfg, trustedUsers: ["memory-fixture"] };
+  const base = `https://${cfg.tailscaleHost}`;
+  const request = (method: string, body?: string, cookie?: string, origin = base) => Object.assign(new Request(`${base}/lite/api/persona/${persona.id}/memory`, { method, headers: { host: cfg.tailscaleHost, "tailscale-user-login": "memory-fixture", origin, "content-type": "application/json", ...(cookie ? { cookie } : {}) }, ...(body ? { body } : {}) }), { remoteAddress: "127.0.0.1" });
+  const get = await handleRequest(request("GET"), cfg, f.runtime.fetcher, f.runtime, sessions);
+  expect(get.status).toBe(200);
+  const memory = await get.json();
+  const body = JSON.stringify({ kind: "facts", content: "New HTTP fact", revision: memory.documents.facts.revision });
+  const refused = await handleRequest(request("PUT", body), cfg, f.runtime.fetcher, f.runtime, sessions);
+  expect(refused.status).toBe(423);
+  expect((await f.memory.read(persona.id)).documents.facts.content).toBe("");
+  const unlocked = await sessions.handle(new Request(`${base}/lite/api/session/unlock`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) }), "memory-fixture");
+  const cookie = unlocked!.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const crossOrigin = await handleRequest(request("PUT", body, cookie, "https://evil.invalid"), cfg, f.runtime.fetcher, f.runtime, sessions);
+  expect(crossOrigin.status).toBe(403);
+  const saved = await handleRequest(request("PUT", body, cookie), cfg, f.runtime.fetcher, f.runtime, sessions);
+  expect(saved.status).toBe(200);
+  expect((await f.memory.read(persona.id)).documents.facts.content).toBe("New HTTP fact");
+  expect(f.texts).toHaveLength(1); expect(f.replies).toHaveLength(0);
+});
 
 test("persona pi creation and recovery actually launch with frozen context while ordinary messages remain raw", async () => {
   const f = await fixture("pi");
