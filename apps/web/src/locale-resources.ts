@@ -1,3 +1,4 @@
+import { LOCALES } from "@homeling/contracts";
 import { detailMessages } from "./locale-detail-resources.ts";
 // Each row is en, de, es, ko, ja, zh. Only product-owned UI copy belongs here.
 export const messages = {
@@ -33,6 +34,7 @@ export const messages = {
   "task.starting": ["starting", "startet", "iniciando", "시작 중", "起動中", "启动中"],
   "task.working": ["working", "in Arbeit", "trabajando", "작업 중", "作業中", "工作中"],
   "task.completed": ["completed", "abgeschlossen", "completado", "완료", "完了", "已完成"],
+  "task.done": ["done", "fertig", "terminado", "완료", "完了", "已完成"],
   "task.failed": ["failed", "fehlgeschlagen", "fallido", "실패", "失敗", "失败"],
   "task.blocked": ["blocked", "blockiert", "bloqueado", "차단됨", "対応待ち", "已阻塞"],
   "task.idle": ["idle", "inaktiv", "inactivo", "대기 중", "待機中", "空闲"],
@@ -46,6 +48,11 @@ export const messages = {
   "composer.quickPause": ["Pause until I confirm", "Bis zu meiner Bestätigung pausieren", "Pausa hasta que confirme", "확인할 때까지 멈춰 주세요", "確認するまで待ってください", "先暂停，等我确认"],
   "composer.unconfirmed": ["Retry the unconfirmed message before sending a new one.", "Die unbestätigte Nachricht erneut versuchen, bevor du eine neue sendest.", "Reintenta el mensaje sin confirmar antes de enviar otro.", "새 메시지를 보내기 전에 미확인 메시지를 재시도하세요.", "新しいメッセージの前に未確認の送信を再試行してください。", "请先重试尚未确认的消息，再发送新消息。"],
   "composer.keys": ["Enter to send · Shift+Enter for a new line", "Enter zum Senden · Shift+Enter für Zeilenumbruch", "Enter para enviar · Shift+Enter para nueva línea", "Enter 전송 · Shift+Enter 줄바꿈", "Enter 送信 · Shift+Enter 改行", "Enter 发送 · Shift+Enter 换行"],
+  "voice.httpFailed": ["Transcription failed ({status}). Please retry.", "Transkription fehlgeschlagen ({status}). Bitte erneut versuchen.", "Error de transcripción ({status}). Reinténtalo.", "받아쓰기 실패 ({status}). 재시도하세요.", "文字起こしに失敗しました（{status}）。再試行してください。", "转写失败（{status}），请重试。"],
+  "voice.unconfigured": ["Transcription is not configured or unavailable. Check Collie STT settings on this computer.", "Transkription nicht eingerichtet oder nicht verfügbar. Prüfe die Collie-STT-Einstellungen auf diesem Computer.", "La transcripción no está configurada o no está disponible. Revisa los ajustes STT de Collie en este ordenador.", "받아쓰기가 설정되지 않았거나 사용할 수 없습니다. 이 컴퓨터의 Collie STT 설정을 확인하세요.", "文字起こしは未設定または利用できません。このコンピューターの Collie STT 設定を確認してください。", "语音转写未配置或不可用，请在电脑上检查 Collie STT 设置。"],
+  "voice.serviceBusy": ["Transcription service busy. Try again later.", "Transkriptionsdienst ausgelastet. Versuche es später erneut.", "Servicio de transcripción ocupado. Inténtalo más tarde.", "받아쓰기 서비스가 사용 중입니다. 잠시 후 재시도하세요.", "文字起こしサービスが混雑しています。後でもう一度お試しください。", "转写服务忙，请稍后重试。"],
+  "voice.unsupportedFormat": ["Recording format unsupported. Try another browser.", "Aufnahmeformat nicht unterstützt. Versuche einen anderen Browser.", "Formato de grabación no compatible. Prueba otro navegador.", "녹음 형식을 지원하지 않습니다. 다른 브라우저를 사용하세요.", "録音形式に対応していません。別のブラウザーをお試しください。", "录音格式不受支持，请换浏览器重试。"],
+  "voice.timeout": ["Transcription timed out. Please retry.", "Zeitüberschreitung bei der Transkription. Bitte erneut versuchen.", "La transcripción agotó el tiempo. Reinténtalo.", "받아쓰기 시간이 초과되었습니다. 재시도하세요.", "文字起こしがタイムアウトしました。再試行してください。", "转写超时，请重试。"],
   "voice.start": ["Start voice input", "Spracheingabe starten", "Iniciar entrada de voz", "음성 입력 시작", "音声入力を開始", "开始语音输入"],
   "voice.stopTranscribe": ["Stop and transcribe", "Stoppen und transkribieren", "Detener y transcribir", "중지하고 받아쓰기", "停止して文字起こし", "停止并转写"],
   "voice.button": ["Voice", "Sprache", "Voz", "음성", "音声", "语音"],
@@ -84,6 +91,7 @@ export const messages = {
   "page.notFound": ["Page not found", "Seite nicht gefunden", "Página no encontrada", "페이지를 찾을 수 없음", "ページが見つかりません", "页面不存在"],
   "persona.backHome": ["Back to Homelings", "Zurück zu Homelings", "Volver a Homelings", "Homelings로 돌아가기", "Homeling 一覧へ戻る", "返回伙伴列表"],
 } satisfies Record<string, readonly [string, string, string, string, string, string]>;
+const messageEntries = Object.entries({ ...messages, ...detailMessages });
 export const localeResources: Record<string, Record<string, string>> = Object.fromEntries(
-  ["en", "de", "es", "ko", "ja", "zh"].map((locale, index) => [locale, Object.fromEntries(Object.entries({ ...messages, ...detailMessages }).map(([key, values]) => [key, values[index]!]))]),
+  LOCALES.map(({ code }, index) => [code, Object.fromEntries(messageEntries.map(([key, values]) => [key, values[index]!]))]),
 );

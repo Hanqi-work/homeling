@@ -1,25 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-export const LOCALES = [
-  { code: "en", nativeName: "English" },
-  { code: "de", nativeName: "Deutsch" },
-  { code: "es", nativeName: "Español" },
-  { code: "ko", nativeName: "한국어" },
-  { code: "ja", nativeName: "日本語" },
-  { code: "zh", nativeName: "简体中文" },
-] as const;
-export type Locale = typeof LOCALES[number]["code"];
-export type Translate = (key: string, params?: Record<string, string | number>) => string;
+import { LOCALES, isLocale, resolveLocale, translateCatalog, type Locale, type Translate } from "@homeling/contracts";
+export { LOCALES } from "@homeling/contracts";
+export type { Locale, Translate } from "@homeling/contracts";
 import { localeResources } from "./locale-resources.ts";
-const resources = localeResources as Record<Locale, Record<string, string>>;
 const preferenceKey = "homeling.locale";
-function isLocale(value: unknown): value is Locale { return LOCALES.some(({ code }) => code === value); }
-export function translate(locale: Locale, key: string, params: Record<string, string | number> = {}): string {
-  const text = resources[locale][key] ?? resources.en[key] ?? key;
-  return text.replace(/\{(\w+)\}/g, (match, name: string) => Object.hasOwn(params, name) ? String(params[name]) : match);
+export function translate(locale: Locale, key: string, params?: Record<string, string | number>): string {
+  return translateCatalog(locale, localeResources, key, params);
 }
 function initialLocale(): Locale {
-  try { const stored = window.localStorage.getItem(preferenceKey); if (isLocale(stored)) return stored; } catch { /* Storage may be disabled; in-memory selection still works. */ }
+  try { return resolveLocale(window.localStorage.getItem(preferenceKey)); } catch { /* Storage may be disabled; in-memory selection still works. */ }
   return "en";
 }
 const defaultContext = { locale: "en" as Locale, persistenceFailed: false, setLocale: (_locale: Locale) => {}, t: ((key, params) => translate("en", key, params)) as Translate };

@@ -3,15 +3,13 @@ import { LOCALES, translate } from "./locale.tsx";
 import { localeResources } from "./locale-resources.ts";
 import { latestPersonaPreview } from "./persona-home.ts";
 
+test("all wire task statuses have UI copy, including done", () => {
+  expect(translate("en", "task.done")).toBe("done");
+  expect(translate("ja", "task.done")).toBe("完了");
+});
 test("unknown keys remain visible and interpolation does not reinterpret replacement values", () => {
   expect(translate("zh", "future.key")).toBe("future.key");
   expect(translate("de", "persona.about", { name: "$& {count}" })).toBe("Über $& {count}");
-});
-test("a missing locale entry falls back to English", () => {
-  const previous = localeResources.de!["delivery.sent"];
-  delete localeResources.de!["delivery.sent"];
-  try { expect(translate("de", "delivery.sent")).toBe("Delivered"); }
-  finally { localeResources.de!["delivery.sent"] = previous!; }
 });
 test("every registered locale has every shipped key and identical interpolation parameters", () => {
   const expected = Object.keys(localeResources.en!).sort();

@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
 
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "api-fixture" }); sessionState.caughtUp(); });
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => { globalThis.fetch = originalFetch; sessionState.lock(); });
 
 describe("control key API", () => {
   test("posts a confirmed semantic action rather than text or raw keys", async () => {
@@ -46,6 +48,11 @@ describe("STT API", () => {
 });
 
 describe("task launch API", () => {
+  test("a 423 interrupted reply remains unknown even though it is a client-error status", async () => {
+    globalThis.fetch = (async () => Response.json({ ok: false, code: "session.interrupted", deliveryUnknown: true, textDelivered: null }, { status: 423 })) as unknown as typeof fetch;
+    await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });
+    expect(sessionState.get().locked).toBe(true);
+  });
   test("reads launcher rows and posts only the selected allowlist command", async () => {
     const requests: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

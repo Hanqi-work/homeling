@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router";
 import { App } from "./App.tsx";
 import { ReplyComposer } from "./ReplyComposer.tsx";
 import { PersonaDetailContent } from "./PersonaDetail.tsx";
+import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -30,6 +31,25 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("special-key confirmation stays open and translates without sending a key", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><SpecialKeyBar paneId="p" identity="same-pane" disabled={false} /></LocaleProvider>));
+  await act(async () => [...container.querySelectorAll("button")].find((item) => item.textContent === "Ctrl+C")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector('[role="group"]')?.textContent).toContain("Senden bestätigen");
+  expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Senden der Sondertaste bestätigen");
+  expect(container.querySelector('[role="group"]')?.textContent).toContain("Ctrl+C");
+});
+test("voice permission error already on screen follows the language selection", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const dependencies = { getStream: async () => { throw new DOMException("denied", "NotAllowedError"); }, createRecorder: () => { throw new Error("not used"); }, transcribe: async () => "not used" };
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><ReplyComposer draft="" onDraftChange={() => {}} onSend={() => {}} voiceDependencies={dependencies} /></LocaleProvider>));
+  await act(async () => container.querySelector('[aria-label="Start voice input"]')!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "ja"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("マイクの使用許可が拒否");
+});
 test("persona deletion confirmation changes language in place without changing the persona name", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   const persona = { id: "mira", name: "Delete Mira", avatar: { color: "#86efac" }, spaceId: "s", mainPaneId: "p", systemPrompt: "", createdAt: "2026-10-08", status: "idle" as const };

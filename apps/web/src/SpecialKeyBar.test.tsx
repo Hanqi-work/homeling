@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { sessionState } from "./session-state.ts";
+beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "key-fixture" }); sessionState.caughtUp(); });
+afterEach(() => sessionState.lock());
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
 import { act, useState } from "react";
@@ -7,12 +10,12 @@ import { SpecialKeyBar, ControlKeyInteraction } from "./SpecialKeyBar.tsx";
 
 test("key strip exposes real cancellation controls and explains disabled authorizing keys", () => {
   const html = renderToStaticMarkup(<SpecialKeyBar paneId="p" identity="i" disabled={false} />);
-  expect(html).toContain('aria-label="特殊键"');
+  expect(html).toContain('aria-label="Special keys"');
   expect(html).toContain("Ctrl+C");
   expect(html).toContain("Esc");
   expect(html).toContain("Enter");
   expect(html).toContain("Cmd");
-  expect(html).toContain("审批");
+  expect(html).toContain("approval");
 });
 
 test("choosing or cancelling a dangerous gesture never sends a key; confirm is required", async () => {
@@ -103,14 +106,14 @@ test("mounted key strip preserves in-flight and unknown composer isolation throu
     await act(() => root.render(<Harness identity="i" />));
     await click("Ctrl+C");
     expect(keyCalls).toBe(0);
-    await click("确认发送");
+    await click("Confirm sending");
     expect(keyCalls).toBe(1);
     expect(container.querySelector("textarea")!.disabled).toBe(true);
     await act(() => root.render(<Harness identity={null} />));
     await act(() => root.render(<Harness identity="i" />));
     expect(container.querySelector("textarea")!.disabled).toBe(true);
     await act(async () => { reject(new Error("response lost")); });
-    expect(container.textContent).toContain("不要重复发送或刷新后重试");
+    expect(container.textContent).toContain("do not send again or refresh to retry");
     expect(container.querySelector("textarea")!.disabled).toBe(true);
     await click("Send");
     expect(sends).toBe(0);
@@ -131,5 +134,5 @@ test("mounted key strip preserves in-flight and unknown composer isolation throu
 test("unavailable and approval states disable cancellation controls with a visible explanation", () => {
   const html = renderToStaticMarkup(<SpecialKeyBar paneId="p" identity={null} disabled />);
   expect(html.match(/disabled=""/g)?.length).toBe(4);
-  expect(html).toContain("待审批，特殊键不可用");
+  expect(html).toContain("approval pending; special keys are unavailable");
 });

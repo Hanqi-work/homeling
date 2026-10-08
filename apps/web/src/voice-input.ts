@@ -1,3 +1,4 @@
+import { LocalizedUIError, type LocalizedCopy } from "./ui-copy.ts";
 import { transcribeAudio } from "./api.ts";
 
 export interface AudioStream { getTracks(): { stop(): void }[] }
@@ -18,12 +19,13 @@ export interface VoiceInputDependencies {
 export interface VoiceInputState {
   phase: "idle" | "permission" | "recording" | "transcribing" | "error";
   message: string;
+  copy?: LocalizedCopy;
 }
 
 export const browserVoiceInput: VoiceInputDependencies = {
   async getStream() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      throw new Error("此浏览器不支持录音，请使用 HTTPS 下的 Safari 或 Chrome。");
+      throw new LocalizedUIError("此浏览器不支持录音，请使用 HTTPS 下的 Safari 或 Chrome。", { key: "voice.unsupportedBrowser" });
     }
     return navigator.mediaDevices.getUserMedia({ audio: true });
   },
@@ -61,9 +63,9 @@ export class VoiceInput {
     private readonly onTranscript: (text: string) => void,
   ) {}
 
-  private update(phase: VoiceInputState["phase"], message: string): void {
+  private update(phase: VoiceInputState["phase"], message: string, copy?: LocalizedCopy): void {
     this.phase = phase;
-    this.onState({ phase, message });
+    this.onState({ phase, message, copy });
   }
 
   private release(): void {
@@ -90,13 +92,13 @@ export class VoiceInput {
     this.controller?.abort();
     this.controller = null;
     this.release();
-    this.update("idle", "录音已取消。");
+    this.update("idle", "录音已取消。", { key: "voice.recordingCancelled" });
   }
 
   async start(): Promise<void> {
     if (["permission", "recording", "transcribing"].includes(this.phase)) return;
     const generation = ++this.generation;
-    this.update("permission", "正在请求麦克风权限…");
+    this.update("permission", "正在请求麦克风权限…", { key: "voice.requestingPermission" });
     try {
       const stream = await this.dependencies.getStream();
       if (generation !== this.generation) {
@@ -112,12 +114,12 @@ export class VoiceInput {
         size += data.size;
         if (size > 8 * 1024 * 1024) {
           this.cancel();
-          this.update("error", "录音过大，请缩短后重试。");
+          this.update("error", "录音过大，请缩短后重试。", { key: "voice.recordingTooLarge" });
         } else if (data.size) chunks.push(data);
       };
       recorder.onerror = () => {
         this.cancel();
-        this.update("error", "录音失败，请检查麦克风后重试。");
+        this.update("error", "录音失败，请检查麦克风后重试。", { key: "voice.recordingFailedCheckMicrophone" });
       };
       recorder.onstop = () => {
         const audio = new Blob(chunks, { type: recorder.mimeType || chunks[0]?.type });
@@ -125,7 +127,7 @@ export class VoiceInput {
         void this.finish(audio, generation);
       };
       recorder.start(1000);
-      this.update("recording", "正在录音，点击停止并转写（最多 60 秒）。");
+      this.update("recording", "正在录音，点击停止并转写（最多 60 秒）。", { key: "voice.recording" });
       this.timer = setTimeout(() => this.stop(), 60_000);
     } catch (error) {
       if (generation !== this.generation) return;
@@ -134,35 +136,36 @@ export class VoiceInput {
       let message = error instanceof Error ? error.message : "无法录音，请检查麦克风后重试。";
       if (name === "NotAllowedError") message = "麦克风权限被拒绝，请在浏览器设置中允许后重试。";
       else if (name === "NotFoundError") message = "未找到麦克风，请连接设备后重试。";
-      this.update("error", message);
+      const copy = name === "NotAllowedError" ? { key: "voice.permissionDenied" } : name === "NotFoundError" ? { key: "voice.microphoneNotFound" } : error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.recordingError", params: { error: error.message } } : { key: "voice.recordingUnavailable" };
+      this.update("error", message, copy);
     }
   }
 
   stop(): void {
     if (this.phase !== "recording" || !this.recorder) return;
-    this.update("transcribing", "正在转写，可取消；不会自动发送。");
+    this.update("transcribing", "正在转写，可取消；不会自动发送。", { key: "voice.transcribing" });
     try { this.recorder.stop(); } catch {
       this.cancel();
-      this.update("error", "录音失败，请重试。");
+      this.update("error", "录音失败，请重试。", { key: "voice.recordingFailed" });
     }
   }
 
   private async finish(audio: Blob, generation: number): Promise<void> {
     if (generation !== this.generation) return;
-    this.update("transcribing", "正在转写，可取消；不会自动发送。");
+    this.update("transcribing", "正在转写，可取消；不会自动发送。", { key: "voice.transcribing" });
     this.controller = new AbortController();
     try {
-      if (!audio.size) throw new Error("录音为空，请重试。");
+      if (!audio.size) throw new LocalizedUIError("录音为空，请重试。", { key: "voice.emptyRecording" });
       const text = await this.dependencies.transcribe(audio, this.controller.signal);
       if (generation !== this.generation) return;
-      if (!text.trim()) throw new Error("未识别到语音，请重试。");
+      if (!text.trim()) throw new LocalizedUIError("未识别到语音，请重试。", { key: "voice.noSpeechRecognized" });
       this.controller = null;
-      this.update("idle", "转写已加入草稿，请编辑确认后发送。");
+      this.update("idle", "转写已加入草稿，请编辑确认后发送。", { key: "voice.transcriptAdded" });
       this.onTranscript(text);
     } catch (error) {
       if (generation !== this.generation) return;
       this.controller = null;
-      this.update("error", error instanceof Error ? error.message : "转写失败，请重试。");
+      this.update("error", error instanceof Error ? error.message : "转写失败，请重试。", error instanceof LocalizedUIError ? error.copy : error instanceof Error ? { key: "voice.transcriptionError", params: { error: error.message } } : { key: "voice.transcriptionFailed" });
     }
   }
 }

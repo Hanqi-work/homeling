@@ -27,6 +27,9 @@ export { transcriptToMessages, mergeTranscripts } from "./transcript.ts";
 export type { CreateResponse, Launcher, LaunchersResponse, Task, TaskStatus } from "./tasks.ts";
 export { mapTaskStatuses } from "./tasks.ts";
 
+export { LOCALES, isLocale, resolveLocale, translateCatalog } from "./locale.ts";
+export type { Locale, Translate, LocaleCatalog } from "./locale.ts";
+
 export type {
   CreatePersonaRequest,
   PersonaAvatar,

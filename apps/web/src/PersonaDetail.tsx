@@ -1,5 +1,5 @@
 import { useLocale } from "./locale.tsx";
-type LocalizedCopy = { key: string; params?: Record<string, string | number> };
+import type { LocalizedCopy } from "./ui-copy.ts";
 import type { PersonaView } from "@homeling/contracts";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";

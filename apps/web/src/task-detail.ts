@@ -48,11 +48,12 @@ export interface TaskSendQueue extends DeferredSendQueue {
   isBlockedFor(id: string): boolean;
 }
 
-export function createTaskSendQueue(): TaskSendQueue {
-  const queue = createDeferredSendQueue();
+export function createTaskSendQueue(admit?: () => (() => void), onSuspended?: (id: string) => void): TaskSendQueue {
+  const queue = createDeferredSendQueue(admit, onSuspended);
   let blockedId: string | null = null;
   return {
     enqueue: (id, operation) => queue.enqueue(id, operation),
+    suspend: () => queue.suspend(),
     block(id) {
       blockedId = id;
       queue.block(id);

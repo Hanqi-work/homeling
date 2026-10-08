@@ -68,7 +68,7 @@ describe("voice draft composer", () => {
     f.dependencies.getStream = async () => { throw new DOMException("denied", "NotAllowedError"); };
     const ui = await mount(f.dependencies);
     await click("Start voice input");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("麦克风权限被拒绝");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Microphone permission denied");
     expect(ui.sends).toEqual([]);
     f.dependencies.getStream = getStream;
     await click("Start voice input");

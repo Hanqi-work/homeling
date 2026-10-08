@@ -118,7 +118,7 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
           {t("common.send")}
         </button>
       </div>
-      {voiceState.message ? <p className="mt-2 text-xs text-neutral-300" role={voiceState.phase === "error" ? "alert" : "status"}>{voiceState.message}</p> : null}
+      {voiceState.message ? <p className="mt-2 text-xs text-neutral-300" role={voiceState.phase === "error" ? "alert" : "status"}>{voiceState.copy ? t(voiceState.copy.key, voiceState.copy.params) : voiceState.message}</p> : null}
       {busy ? <button type="button" onClick={() => voice.cancel()} className="mt-1 min-h-11 px-3 text-sm text-neutral-300">{t("voice.cancel")}</button> : null}
       {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">{disabledReason ?? t("composer.unconfirmed")}</p> : null}
       <p className="mt-1 text-right text-[10px] text-neutral-500">{t("composer.keys")}</p>
