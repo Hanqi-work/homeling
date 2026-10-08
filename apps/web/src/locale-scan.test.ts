@@ -7,7 +7,7 @@ import { localeResources } from "./locale-resources.ts";
 
 const sourceRoot = dirname(import.meta.path);
 // Delivered migrated surfaces only for this phase. Expand to every production TSX after all final tips.
-const migratedSurfaces = ["App.tsx", "PersonaDetail.tsx", "ConversationMessage.tsx", "PendingRequestCard.tsx", "RawPaneMirror.tsx", "TaskChip.tsx", "ReplyComposer.tsx", "SpecialKeyBar.tsx", "locale.tsx"];
+const migratedSurfaces = ["App.tsx", "PersonaDetail.tsx", "ConversationMessage.tsx", "PendingRequestCard.tsx", "RawPaneMirror.tsx", "TaskChip.tsx", "ReplyComposer.tsx", "SpecialKeyBar.tsx", "PersonaMemoryEditor.tsx", "SessionBoundary.tsx", "AppRoot.tsx", "locale.tsx"];
 const technicalText = new Set(["Ctrl+C", "Esc", "Enter", "Cmd", "→", "·", ":"]);
 test("migrated surfaces contain no untranslated product JSX text or accessible names", async () => {
   const violations: string[] = [];
@@ -31,6 +31,7 @@ test("every literal translation reference and structured copy key has a nonempty
       if (ts.isCallExpression(node) && node.expression.getText(file) === "t") {
         const key = node.arguments[0]; if (key && ts.isStringLiteral(key)) references.add(key.text);
       }
+      if (ts.isStringLiteral(node) && /^(?:common|locale|message|delivery|permission|mirror|task|composer|voice|nav|persona|personaDetail|page|specialKey|memory|session|app)\.[a-zA-Z]+$/.test(node.text)) references.add(node.text);
       if (ts.isPropertyAssignment(node) && node.name.getText(file) === "key" && ts.isStringLiteral(node.initializer) && /^[a-z]+\.[a-zA-Z]+$/.test(node.initializer.text)) references.add(node.initializer.text);
       ts.forEachChild(node, visit);
     }

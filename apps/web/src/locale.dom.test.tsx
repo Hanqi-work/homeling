@@ -10,6 +10,7 @@ import { PersonaDetailContent } from "./PersonaDetail.tsx";
 import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { PendingRequestCard } from "./PendingRequestCard.tsx";
 import { ReplyRequestError } from "./api.ts";
+import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
 
 const window = new Window({ url: "https://homeling.test/lite/" });
 const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -33,6 +34,23 @@ async function mount() {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => root.render(<LocaleProvider><LanguageSettings /><Consumer /></LocaleProvider>));
 }
+test("memory labels, fixed injection metadata and blocked-save notice switch language without rewriting documents or replaying", async () => {
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  let writes = 0;
+  const memory = { documents: { facts: { content: "Facts 原始记忆", revision: "r1" }, preferences: { content: "Preferences", revision: "r1" }, project: { content: "Project notes", revision: "r1" } }, effective: "next-session", injection: { strategy: "first-message-prefix", unsupported: true, notice: "unsupported native injection: frozen memory" } };
+  const fetcher = async (_url: string, init?: RequestInit) => init?.method === "PUT" ? (writes++, Response.json({ executed: false, deliveryUnknown: false }, { status: 423 })) : Response.json(memory);
+  await act(async () => root.render(<LocaleProvider><LanguageSettings /><PersonaMemoryEditor personaId="mira" fetcher={fetcher} /></LocaleProvider>));
+  const textarea = container.querySelector('textarea[name="facts"]')!;
+  await act(async () => textarea.closest("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "de"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(container.querySelector("h2")?.textContent).toBe("Dauerhafte Erinnerungen");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Speichern abgelehnt");
+  expect(container.textContent).toContain("Erste Nachricht");
+  expect(container.querySelector('textarea[name="facts"]')).toBe(textarea);
+  expect((textarea as HTMLTextAreaElement).value).toBe("Facts 原始记忆");
+  expect(writes).toBe(1);
+});
 test("a permission attempt refused before dispatch stays pending and its existing warning re-translates", async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   let approvals = 0;

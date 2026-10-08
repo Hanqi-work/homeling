@@ -10,10 +10,11 @@ import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetc
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
 import { HerdrRpcError, HerdrSocketClient } from "./herdr-client.ts";
+import { handleMemoryRequest, isMemoryPath } from "./memory-routes.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
 import {
   createEventObserver, createPersona, deletePersona, launchPersonaTask, listPersonas, recoverPersonas,
-  sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
+  memoryStoreOf, sendPersonaMessage, updatePersona, validatePersonaInput, validatePersonaPatch, type PersonaRuntime,
 } from "./persona-service.ts";
 
 import { createDaemonSystemAdmissions } from "./system-admission.ts";
@@ -158,6 +159,9 @@ export async function handleRequest(
   }
 
   const runtime = runtimeOverride ?? personaRuntime(cfg, upstreamFetch);
+  if (isMemoryPath(pathname)) {
+    return (await handleMemoryRequest(req, { registry: runtime.registry, memory: memoryStoreOf(runtime) }, admission))!;
+  }
   if (pathname === `${API_PERSONA_PATH}/list` && req.method === "GET") {
     try {
       return Response.json({ personas: await listPersonas(runtime) });

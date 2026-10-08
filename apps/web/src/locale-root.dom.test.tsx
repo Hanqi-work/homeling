@@ -39,9 +39,11 @@ async function unlock() {
 }
 function fakeServer(onReply: () => Promise<Response>) {
   let locked = true;
+  let sessionWrites = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/session")) {
+      if (init?.method === "POST") sessionWrites++;
       if (url.endsWith("/unlock")) locked = false;
       if (url.endsWith("/lock")) locked = true;
       return Response.json({ locked, available: true, epoch: locked ? 0 : 1, generation: "boot", idleDeadline: Date.now() + 900_000, absoluteDeadline: Date.now() + 28_800_000, serverNow: Date.now() });
@@ -54,6 +56,7 @@ function fakeServer(onReply: () => Promise<Response>) {
     if (url.includes("/history")) return Response.json({ paneId: "p1", available: true, entries: [], hasMore: false, total: 0, fileTruncated: false });
     throw new Error(`Unexpected fake request: ${url} ${init?.method}`);
   }) as typeof fetch;
+  return { sessionWrites: () => sessionWrites };
 }
 async function mount(path = "/p/p1") {
   sessionState.lock();
@@ -61,6 +64,19 @@ async function mount(path = "/p/p1") {
   await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={[path]}><Location />{path !== "/settings" ? <LanguageSettings /> : null}<AppRoot slots={{ settings: <button data-other-settings>Push settings extension</button> }} /></MemoryRouter></LocaleProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
 }
+test("locked language control changes only local copy and does not unlock or write a session", async () => {
+  const server = fakeServer(async () => { throw new Error("unexpected business write"); });
+  await mount("/settings");
+  const dialog = container.querySelector<HTMLDialogElement>('dialog[aria-labelledby="homeling-lock-title"]')!;
+  expect(dialog.open).toBe(true);
+  const select = dialog.querySelector<HTMLSelectElement>("#homeling-locked-language")!;
+  await act(async () => { select.value = "es"; select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event); });
+  expect(dialog.querySelector("h1")?.textContent).toBe("Homeling está bloqueado");
+  expect(dialog.open).toBe(true);
+  expect(server.sessionWrites()).toBe(0);
+  expect(container.querySelectorAll("#homeling-language").length).toBe(1);
+  expect(container.querySelectorAll("#homeling-locked-language").length).toBe(1);
+});
 test("production settings selector persists after root remount and retains lock and extension controls", async () => {
   fakeServer(async () => { throw new Error("unexpected business write"); });
   await mount("/settings"); await unlock();
@@ -88,6 +104,7 @@ test("production root retains its real draft and route across locale and session
   expect(textarea.value).toBe("My original draft 请继续");
   await act(() => sessionState.lock());
   await changeLocale("de");
+  expect(container.querySelector("#homeling-lock-title")?.textContent).toBe("Homeling ist gesperrt");
   expect(textarea.value).toBe("My original draft 请继续");
   await unlock();
   expect(container.querySelector("textarea")).toBe(textarea);
