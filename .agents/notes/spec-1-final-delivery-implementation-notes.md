@@ -9,7 +9,8 @@
 
 ## 决策与因果
 - 原代理不可联系，由 Opus 实施者续接原 workspace，先只读核现场，不重做已完成票。
-- 主目录写入与 integration 合入只允许单一 merger；#19 与 #20 独立 workspace 实施，避免共享 change 重写。
+- 主目录写入与 integration 合入仅一位 owner；旧 merger 已明确交还 ownership，后续由主执行器串行合入。#19 与 #20 独立 workspace 实施，避免共享 change 重写。
+- 用户在临时测试凭据与替代 QA space 两项专项请求后，直接明确授权继续所有完成任务所需操作；恢复现有隔离测试初始化/轮换/清理及临时 push 测试 keys，替代浏览器 space 为 1/p1。生产初始化与部署不作为本次代码交付动作；新的真实工具拒绝仍须停止，不能代理绕过。
 - 分享 green revision 后先离开到新 child；引用完整 SHA。
 - 最终统一 Standards / Spec 审查基线 main 2f245143；由单个 Opus fixer 收敛全部问题。
 

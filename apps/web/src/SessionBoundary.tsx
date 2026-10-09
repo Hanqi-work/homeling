@@ -12,7 +12,7 @@ export function useSessionSnapshot(): SessionSnapshot {
 async function sessionRequest(action?: string, secret?: string): Promise<SessionSnapshot> {
   const response = await fetch(`${SESSION_URL}${action ? `/${action}` : ""}`, {
     method: action ? "POST" : "GET", cache: "no-store", signal: AbortSignal.timeout(10_000),
-    headers: { accept: "application/json", ...(action ? { "content-type": "application/json" } : {}) },
+    headers: { accept: "application/json", ...(action ? { "content-type": "application/json" } : {}), ...(action === "activity" ? { "x-homeling-session-epoch": String(sessionState.get().epoch), "x-homeling-session-generation": sessionState.get().generation ?? "" } : {}) },
     ...(action ? { body: JSON.stringify(secret ? { secret } : {}) } : {}),
   });
   const result = await response.json() as SessionSnapshot & { error?: string; code?: string };

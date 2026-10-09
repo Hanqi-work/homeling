@@ -5,8 +5,15 @@ import { sessionState } from "./session-state.ts";
 
 /** UI admission complements, never replaces, the daemon cookie/epoch gate. */
 export async function sessionMutationFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
-  try { sessionState.admit()(); } catch { throw new ReplyRequestError("Unlock Homeling and confirm this action", false); }
-  const response = await fetch(input, init);
+  let check: () => void;
+  try { check = sessionState.admit(); } catch { throw new ReplyRequestError("Unlock Homeling and confirm this action", false); }
+  const lease = sessionState.get();
+  if (!Number.isSafeInteger(lease.epoch) || !lease.generation) throw new ReplyRequestError("Unlock Homeling and confirm this action", false);
+  const headers = new Headers(init.headers);
+  headers.set("x-homeling-session-epoch", String(lease.epoch));
+  headers.set("x-homeling-session-generation", lease.generation);
+  try { check(); } catch { throw new ReplyRequestError("Unlock Homeling and confirm this action", false); }
+  const response = await fetch(input, { ...init, headers });
   if (response.status === 423) sessionState.lock();
   return response;
 }
@@ -104,7 +111,7 @@ export async function updatePersonaAppearance(personaId: string, patch: PersonaA
   }
   const result = await response.json().catch(() => null) as { persona?: PersonaRecord; error?: string; executed?: boolean; deliveryUnknown?: boolean } | null;
   if (!response.ok || result?.persona?.id !== personaId) {
-    const notDispatched = result?.executed !== true && result?.deliveryUnknown !== true && ([400, 401, 403, 404, 415].includes(response.status) || (response.status === 423 && result?.executed === false && result.deliveryUnknown === false));
+    const notDispatched = result?.executed !== true && result?.deliveryUnknown !== true && ([400, 401, 403, 404, 415].includes(response.status) || (response.status === 423 && definiteLockRefusal(result)));
     throw new PersonaAppearanceError(result?.error ?? `Save could not be confirmed (${response.status}). Check saved customization.`, notDispatched);
   }
   return result.persona;
@@ -129,17 +136,23 @@ export async function deletePersona(personaId: string): Promise<PersonaDeleteRes
   });
   const result = await response.json().catch(() => null) as (Partial<PersonaDeleteResult> & { error?: string; executed?: boolean; deliveryUnknown?: boolean }) | null;
   if (!response.ok || typeof result?.deleted !== "boolean" || typeof result.archived !== "boolean") {
-    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423 && result?.executed === false && result.deliveryUnknown === false);
+    throw new PersonaDeleteError(result?.error ?? `Deletion could not be confirmed (${response.status}); check the persona before retrying.`, response.status === 423 && definiteLockRefusal(result));
   }
   return { deleted: result.deleted, archived: result.archived };
 }
 
+function definiteLockRefusal(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const outcome = result as { executed?: unknown; deliveryUnknown?: unknown };
+  return outcome.executed === false && outcome.deliveryUnknown === false;
+}
 function replyDeliveryStatus(
-  result: { textDelivered?: boolean | null; deliveryUnknown?: boolean },
+  result: { textDelivered?: boolean | null; deliveryUnknown?: boolean; executed?: boolean },
   httpStatus: number,
 ): boolean | null {
   if (result.textDelivered === true) return true;
   if (result.deliveryUnknown === true) return null;
+  if (httpStatus === 423) return definiteLockRefusal(result) ? false : null;
   if (typeof result.textDelivered === "boolean") return result.textDelivered;
   return httpStatus < 500 ? false : null;
 }
@@ -150,7 +163,7 @@ export async function sendPersonaMessage(personaId: string, text: string): Promi
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean; personaConfirmationText?: string } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean; executed?: boolean; personaConfirmationText?: string } = {};
   try { result = await response.json() as typeof result; } catch { /* use HTTP fallback */ }
   if (!response.ok || result.ok !== true) {
     throw new ReplyRequestError(
@@ -219,9 +232,9 @@ export async function approvePendingRequest(requestId: string, optionId: string,
   } catch {
     // The status below still distinguishes a stale request from a failed network write.
   }
-  if (response.status === 423) return result?.deliveryUnknown === true
-    ? { status: "resolved", outcome: "unknown" }
-    : { status: "pending", outcome: "not-submitted" };
+  if (response.status === 423) return definiteLockRefusal(result)
+    ? { status: "pending", outcome: "not-submitted" }
+    : { status: "resolved", outcome: "unknown" };
   if (result && ["pending", "resolved", "expired"].includes(result.status)) return result;
   throw new Error(`approval ${response.status}`);
 }
@@ -277,6 +290,9 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
     });
     let value: unknown;
     try { value = await response.json(); } catch { /* HTTP rejection below is still definite. */ }
+    if (response.status === 423) {
+      return { outcome: definiteLockRefusal(value) ? "not-submitted" : "unknown", error: "Unlock Homeling before controlling the pane" };
+    }
     if (value && typeof value === "object" && "outcome" in value) {
       const result = value as ControlKeyResult;
       if ((response.ok && result.outcome === "accepted") || result.outcome === "not-submitted" || result.outcome === "unknown") {
@@ -284,9 +300,6 @@ export async function sendPaneControlKey(paneId: string, action: ControlKeyActio
       }
     }
     if (value && typeof value === "object" && "executed" in value && value.executed === false) return { outcome: "not-submitted", error: "error" in value && typeof value.error === "string" ? value.error : `control key ${response.status}` };
-    if (response.status === 423 && value && typeof value === "object") {
-      return { outcome: (value as { deliveryUnknown?: boolean }).deliveryUnknown === true ? "unknown" : "not-submitted", error: "Unlock Homeling before controlling the pane" };
-    }
 
     return { outcome: [400, 401, 403, 404, 405, 415, 429].includes(response.status) ? "not-submitted" : "unknown", error: `control key ${response.status}` };
   } catch (error) {
@@ -313,7 +326,7 @@ export async function sendPaneReply(paneId: string, text: string, occurrenceKey?
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text, submit: true }),
   });
-  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean } = {};
+  let result: { ok?: boolean; error?: string; textDelivered?: boolean | null; deliveryUnknown?: boolean; executed?: boolean } = {};
   try {
     result = await response.json() as typeof result;
   } catch {

@@ -68,12 +68,16 @@ test("actual HTTP locale entry reuses Origin, JSON and user-session admission wi
     const sessions = new SessionController({ verify: () => secret => secret === "a".repeat(43) });
     let sends = 0;
     const runtime = { store: new PushStore(join(dir, "push.json")), publicKey: "public", transport: { send: async () => { sends++; return { status: "sent" as const }; } } };
-    const http = (path: string, body: unknown, cookie?: string, origin = "https://home.example", contentType = "application/json") => Object.assign(new Request(`https://home.example/lite/api/${path}`, { method: "POST", headers: { host: "home.example", "tailscale-user-login": "alice", origin, "content-type": contentType, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
+    let sessionHeaders: Record<string, string> = {};
+    const http = (path: string, body: unknown, cookie?: string, origin = "https://home.example", contentType = "application/json") => Object.assign(new Request(`https://home.example/lite/api/${path}`, { method: "POST", headers: { host: "home.example", "tailscale-user-login": "alice", origin, "content-type": contentType, ...(cookie ? { cookie, ...sessionHeaders } : {}) }, body: JSON.stringify(body) }), { remoteAddress: "127.0.0.1" });
     const sub = subscription(); const update = { endpoint: sub.endpoint, locale: "de" };
     expect((await handleRequest(http("push/locale", update), cfg, fetch, undefined, sessions, runtime)).status).toBe(423);
     expect((await handleRequest(http("push/locale", update, undefined, "https://evil.example"), cfg, fetch, undefined, sessions, runtime)).status).toBe(403);
     const unlocked = await handleRequest(http("session/unlock", { secret: "a".repeat(43) }), cfg, fetch, undefined, sessions, runtime);
     const cookie = unlocked.headers.get("set-cookie")!.split(";")[0]!;
+    expect((await handleRequest(http("push/locale", update, cookie), cfg, fetch, undefined, sessions, runtime)).status).toBe(423);
+    const session = await unlocked.json() as { epoch: number; generation: string };
+    sessionHeaders = { "x-homeling-session-epoch": String(session.epoch), "x-homeling-session-generation": session.generation };
     expect((await handleRequest(http("push/subscribe", { ...sub, locale: "en" }, cookie), cfg, fetch, undefined, sessions, runtime)).status).toBe(201);
     expect((await handleRequest(http("push/locale", update, cookie, "https://home.example", "text/plain"), cfg, fetch, undefined, sessions, runtime)).status).toBe(415);
     expect((await handleRequest(http("push/locale", update, cookie), cfg, fetch, undefined, sessions, runtime)).status).toBe(200);

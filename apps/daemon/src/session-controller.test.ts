@@ -1,18 +1,41 @@
 import { expect, test } from "bun:test";
 import { SessionController } from "./session-controller.ts";
 const secret = "a".repeat(43);
-function req(path: string, body?: string, cookie?: string) {
-  return new Request(`https://home.ts.net/lite/api/session${path}`, { method: body === undefined ? "GET" : "POST", headers: { origin: "https://home.ts.net", "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body });
+function req(path: string, body?: string, cookie?: string, generation?: string) {
+  return new Request(`https://home.ts.net/lite/api/session${path}`, { method: body === undefined ? "GET" : "POST", headers: { origin: "https://home.ts.net", "content-type": "application/json", ...(cookie ? { cookie, "x-homeling-session-epoch": "1" } : {}), ...(generation ? { "x-homeling-session-generation": generation } : {}) }, body });
 }
+test("a stale browser tab cannot re-admit old intent with another tab's newly rotated cookie", async () => {
+  const controller = new SessionController({ verify: () => (input) => input === secret });
+  const first = (await controller.handle(req("/unlock", JSON.stringify({ secret })), "alice"))!;
+  const firstCookie = first.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const firstState = await first.json() as { epoch: number };
+  await controller.handle(req("/lock", "{}", firstCookie), "alice");
+  const rotated = (await controller.handle(req("/unlock", JSON.stringify({ secret }), firstCookie), "alice"))!;
+  const newCookie = rotated.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const newState = await rotated.json() as { epoch: number };
+  const stale = req("", undefined, newCookie, controller.generation); stale.headers.set("x-homeling-session-epoch", String(firstState.epoch));
+  expect(() => controller.admission(stale, "alice")).toThrow("session.locked");
+  const fresh = req("", undefined, newCookie, controller.generation); fresh.headers.set("x-homeling-session-epoch", String(newState.epoch));
+  expect(controller.admission(fresh, "alice")).toBeDefined();
+  fresh.headers.delete("x-homeling-session-epoch");
+  expect(() => controller.admission(fresh, "alice")).toThrow("session.locked");
+  const rebooted = new SessionController({ verify: () => (input) => input === secret });
+  const restarted = (await rebooted.handle(req("/unlock", JSON.stringify({ secret })), "alice"))!;
+  const rebootCookie = restarted.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const oldBoot = req("", undefined, rebootCookie, controller.generation);
+  expect(() => rebooted.admission(oldBoot, "alice")).toThrow("session.locked");
+  expect(rebooted.admission(req("", undefined, rebootCookie, rebooted.generation), "alice")).toBeDefined();
+});
+
 test("credential corruption or local rotation revokes already-admitted operations at their next commit", async () => {
   let verify: (((input: string) => boolean) & { fingerprint?: string }) | null = Object.assign((input: string) => input === secret, { fingerprint: "v1" });
   const controller = new SessionController({ verify: () => verify });
   const response = (await controller.handle(req("/unlock", JSON.stringify({ secret })), "alice"))!;
   const cookie = response.headers.get("set-cookie")!.split(";", 1)[0]!;
-  const admission = controller.admission(req("", undefined, cookie), "alice");
+  const admission = controller.admission(req("", undefined, cookie, controller.generation), "alice");
   verify = null;
   expect(() => admission.dispatch(() => "write")).toThrow("session.locked");
-  expect(() => controller.admission(req("", undefined, cookie), "alice")).toThrow("session.locked");
+  expect(() => controller.admission(req("", undefined, cookie, controller.generation), "alice")).toThrow("session.locked");
 });
 
 test("subject and global throttles count attempts without a cookie, regardless of newly generated session ids", async () => {
@@ -46,8 +69,8 @@ test("unlock alone mints a strict HTTPS cookie; polls and activity never resurre
   expect(setCookie).toContain("__Secure-homeling_session=");
   for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/lite/"]) expect(setCookie).toContain(flag);
   const cookie = setCookie.split(";", 1)[0]!;
-  expect(controller.admission(req("", undefined, cookie), "alice")).toBeDefined();
+  expect(controller.admission(req("", undefined, cookie, controller.generation), "alice")).toBeDefined();
   await controller.handle(req("/lock", "{}", cookie), "alice");
-  expect(() => controller.admission(req("", undefined, cookie), "alice")).toThrow("session.locked");
+  expect(() => controller.admission(req("", undefined, cookie, controller.generation), "alice")).toThrow("session.locked");
   expect((await controller.handle(req("/activity", "{}", cookie), "alice"))!.status).toBe(423);
 });

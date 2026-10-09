@@ -56,7 +56,8 @@ test("actual HTTP memory save requires a session, refuses bad Origin, and GET do
   const sessions = new SessionController({ verify: () => input => input === secret });
   const cfg = { ...f.runtime.cfg, trustedUsers: ["memory-fixture"] };
   const base = `https://${cfg.tailscaleHost}`;
-  const request = (method: string, body?: string, cookie?: string, origin = base) => Object.assign(new Request(`${base}/lite/api/persona/${persona.id}/memory`, { method, headers: { host: cfg.tailscaleHost, "tailscale-user-login": "memory-fixture", origin, "content-type": "application/json", ...(cookie ? { cookie } : {}) }, ...(body ? { body } : {}) }), { remoteAddress: "127.0.0.1" });
+  let lease: { epoch: number; generation: string };
+  const request = (method: string, body?: string, cookie?: string, origin = base) => Object.assign(new Request(`${base}/lite/api/persona/${persona.id}/memory`, { method, headers: { host: cfg.tailscaleHost, "tailscale-user-login": "memory-fixture", origin, "content-type": "application/json", ...(cookie ? { cookie, "x-homeling-session-epoch": String(lease.epoch), "x-homeling-session-generation": lease.generation } : {}) }, ...(body ? { body } : {}) }), { remoteAddress: "127.0.0.1" });
   const get = await handleRequest(request("GET"), cfg, f.runtime.fetcher, f.runtime, sessions);
   expect(get.status).toBe(200);
   const memory = await get.json();
@@ -66,6 +67,7 @@ test("actual HTTP memory save requires a session, refuses bad Origin, and GET do
   expect((await f.memory.read(persona.id)).documents.facts.content).toBe("");
   const unlocked = await sessions.handle(new Request(`${base}/lite/api/session/unlock`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret }) }), "memory-fixture");
   const cookie = unlocked!.headers.get("set-cookie")!.split(";", 1)[0]!;
+  lease = await unlocked!.json() as typeof lease;
   const crossOrigin = await handleRequest(request("PUT", body, cookie, "https://evil.invalid"), cfg, f.runtime.fetcher, f.runtime, sessions);
   expect(crossOrigin.status).toBe(403);
   const saved = await handleRequest(request("PUT", body, cookie), cfg, f.runtime.fetcher, f.runtime, sessions);
