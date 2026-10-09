@@ -32,6 +32,15 @@ test("symlink paths and an interrupted rotation remain unavailable without creat
   expect(readFileSync(join(dir, "unlock-secret"), "utf8")).toBe(before);
 });
 
+test("init cannot repair a missing secret around an existing verifier or publish an inconsistent pair", () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "homeling-partial-")); dirs.push(root);
+  const dir = join(root, "state"); initializeUnlockCredentials(dir);
+  rmSync(join(dir, "unlock-secret"));
+  expect(() => initializeUnlockCredentials(dir)).toThrow();
+  expect(existsSync(join(dir, "unlock-secret"))).toBe(false);
+  expect(loadUnlockVerifier(dir)).toBeNull();
+});
+
 test("local exclusive initialization persists owner-only secret and a domain-separated verifier; runtime reads no plaintext", () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "homeling-lock-")); dirs.push(root);
   const dir = join(root, "state");

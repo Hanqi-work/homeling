@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PersonaAppearanceError, updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio } from "./api.ts";
+import { PersonaAppearanceError, updatePersonaAppearance, createPersona, fetchLaunchers, fetchPaneScreen, fetchPersonas, launchTask, sendPaneReply, sendPersonaMessage, stopPaneTask, sendPaneControlKey, transcribeAudio, approvePendingRequest } from "./api.ts";
 
 import { sessionState } from "./session-state.ts";
 beforeEach(() => { sessionState.apply({ locked: false, epoch: 1, generation: "api-fixture" }); sessionState.caughtUp(); });
@@ -33,6 +33,13 @@ test("customization distinguishes pre-dispatch lock from an interrupted or malfo
 });
 
 describe("control key API", () => {
+  test("423 is classified before generic not-submitted or executed-false branches", async () => {
+    for (const [body, outcome] of [[{}, "unknown"], [{ executed: false }, "unknown"], [{ outcome: "not-submitted" }, "unknown"], [{ executed: false, deliveryUnknown: true, outcome: "not-submitted" }, "unknown"], [{ executed: false, deliveryUnknown: false }, "not-submitted"]] as const) {
+      sessionState.apply({ locked: false, epoch: 4, generation: "api-fixture" }); sessionState.caughtUp();
+      globalThis.fetch = (async () => Response.json(body, { status: 423 })) as unknown as typeof fetch;
+      expect((await sendPaneControlKey("p1", "interrupt", "identity")).outcome).toBe(outcome);
+    }
+  });
   test("posts a confirmed semantic action rather than text or raw keys", async () => {
     let posted: unknown;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -74,6 +81,13 @@ describe("STT API", () => {
 });
 
 describe("task launch API", () => {
+  test("a malformed 423 never proves that a reply, approval or control key was not dispatched", async () => {
+    const reset = () => { sessionState.apply({ locked: false, epoch: 3, generation: "api-fixture" }); sessionState.caughtUp(); };
+    globalThis.fetch = (async () => Response.json({}, { status: 423 })) as unknown as typeof fetch;
+    await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });
+    reset(); expect(await approvePendingRequest("r1", "1")).toMatchObject({ outcome: "unknown" });
+    reset(); expect(await sendPaneControlKey("p1", "interrupt", "identity")).toMatchObject({ outcome: "unknown" });
+  });
   test("a 423 interrupted reply remains unknown even though it is a client-error status", async () => {
     globalThis.fetch = (async () => Response.json({ ok: false, code: "session.interrupted", deliveryUnknown: true, textDelivered: null }, { status: 423 })) as unknown as typeof fetch;
     await expect(sendPaneReply("p1", "hello")).rejects.toMatchObject({ textDelivered: null });

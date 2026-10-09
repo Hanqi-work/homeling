@@ -48,7 +48,17 @@ test('actual HTTP gate rejects every push business write while locked and cross-
     expect((await store.load()).preferences.enabled).toBe(true); expect(sent).toBe(0);
     const unlock = await handleRequest(request('session/unlock', { secret: 'a'.repeat(43) }), cfg, fetch, undefined, sessions, push);
     const cookie = unlock.headers.get('set-cookie')!.split(';')[0]!;
-    expect((await handleRequest(request('push/preferences', { enabled: false }, cookie), cfg, fetch, undefined, sessions, push)).status).toBe(200);
+    const state = await unlock.json() as { epoch: number; generation: string };
+    expect((await handleRequest(request('push/preferences', { enabled: false }, cookie), cfg, fetch, undefined, sessions, push)).status).toBe(423);
+    const write = request('push/preferences', { enabled: false }, cookie);
+    write.headers.set('x-homeling-session-epoch', String(state.epoch));
+    const stale = request('push/preferences', { enabled: false }, cookie);
+    stale.headers.set('x-homeling-session-epoch', String(state.epoch));
+    stale.headers.set('x-homeling-session-generation', 'stale-boot');
+    expect((await handleRequest(stale, cfg, fetch, undefined, sessions, push)).status).toBe(423);
+    expect((await store.load()).preferences.enabled).toBe(true); expect(sent).toBe(0);
+    write.headers.set('x-homeling-session-generation', state.generation);
+    expect((await handleRequest(write, cfg, fetch, undefined, sessions, push)).status).toBe(200);
     expect((await store.load()).preferences.enabled).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
