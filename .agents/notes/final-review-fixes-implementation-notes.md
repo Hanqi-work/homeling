@@ -26,6 +26,17 @@
 - 交付边界顾问实际返回：认可有限修复代码交付，#6/#9/#12/#16 与真实设备 AC 仍 OPEN；只读 notes、未独立核测试/历史，不当作旧 history 顾问返回或用户豁免。
 - 已核最新 integrate-v1 为 59ccc9882d773e1d1700db0cc7bc3b37f757a808，确在 fixer 祖先；无需构造无意义重复 merge。最终冻结后 jj new 离开，再由主串行合入与复验/单批 UI/CI。
 
+## Linux CI canary follow-up
+- 基线改为主已合入/推送的 85ee3af1bd79fa74ac295d6fb16a8af5798f621c；从原空 child 新建 own revision，未修改分享 green 0e5c113e 或 integration/bookmarks。
+- Linux run 37934872845 实际 527/1，唯一 normal canary save→check 失败；读取主提供的合成 fixture CI 日志，不读取代理 .output。旧 macOS 三绿不覆盖本次子修订。
+- 根因实证：GNU stat 的 `-f %m` 失败前向 stdout 输出 filesystem 数据；原命令替换把失败 stdout 与 `-c %Y` 的 mtime 拼接成 fingerprint，filesystem 变化被误判为 binary 变化。入口回归先用兼容 GNU 的失败 stdout stub 确定性 RED，诊断打印 was probe1/now probe3；不凭猜测改 pin。
+- 修复仅单独捕获 BSD probe，失败后由 GNU probe 覆盖值；SHA256/mtime 双检查、dirty/不可读 Git/multi-root/缺 root/binary 变化拒绝均保留。入口测试增加 native/GNU-fallback 两模式，并在 normal save/check 拒绝时显示 stdout+stderr；断言未放宽。
+- 窄测 deployment-docs/canary 11/0；另用本机真实 /opt/homebrew/bin/gstat 对隔离合成 fixture 实跑 save/check、dirty、unreadable Git、multi-root、binary 变化矩阵全部通过，baseline 字节不变。该 GNU-on-macOS 证据不是 Linux CI 成功声明；新 Linux CI 仍须主推送后读取。
+- 3c485d475822b792a014b93fd569438d5e2c4069 新 child 实际全量 529/0、92 files、6646 assertions，typecheck/build 绿；既有 act warnings/固定故障注入日志保留。旧 528/0 不作为本次证据。
+- 原独立 reviewer 与 simplifier 对 85ee3af1→3c485d47 精确只读复核均无新增高置信阻塞、无需继续简化；顾问亦认可有限最小修复。审查者未实跑，GNU 隔离矩阵/全量三绿以执行器实跑单列；Linux CI 仍待主推送读取。
+- Context7 GNU Coreutils 查询网络 fetch failed，未宣称官方文档查询成功；本机真实 GNU 行为与公开入口回归是根因证据。
+- 本轮不改 UI、不重跑浏览器、不部署、不操作真实 Collie；notes 收尾后再次核最终完整 SHA 三绿，jj new 离开再 READY。
+
 ## Deviations / 未闭环
 - #12 上游 wire 无可信 session/entry/attempt 绑定；daemon attempt 元数据明确 historyBinding=unbound，保留 history 原文及用户自输前缀，不用唯一同文/时间/frontier/本地 UUID 猜隐藏。未实现可信持久显示绑定，不能称该 finding 全修。旧 history 顾问未收到，不引用虚构结论。
 - #6 上游 timeout 无安全确认清理全部残留能力；#9 Enter/Cmd/任意 Ctrl 组合仍禁用；#16 不可观察同文新 generation 仍保守可能漏推。真实手机/HTTPS/PWA/STT/pi/push/双通道 AC 未由本轮自动化证明，不自行豁免或 close。

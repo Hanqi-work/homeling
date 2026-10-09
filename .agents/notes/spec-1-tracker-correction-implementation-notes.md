@@ -21,6 +21,8 @@
 ## CI 与 tracker 后续
 - 首次主冻结/push 为 85ee3af1bd79fa74ac295d6fb16a8af5798f621c；已 jj new 离开。HTTPS push 两次 LibreSSL SSL_ERROR_SYSCALL 后先读回远端未更新；curl 与两种本机 Git 的只读 ls-remote 均可连接，按安装版 jj help 文档仅当次命令显式 git.executable-path=/opt/homebrew/bin/git 后推送成功。未持久改配置或关闭 TLS 校验，未证明根因就是二进制差异。Context7 resolve 当时 fetch failed，不声称官方文档查询成功。
 - 两个同 SHA 新 CI 均 failure，实际 527/1：scripts/deployment-docs.test.ts:75 的 canary shell 正常 save→check 在Linux失败。本机528/0不代替CI；唯一fixer以85新child继续跨平台TDD，不skip/改pin/放宽守卫，不修改共享0e绿色。失败证据 `/tmp/homeling-final-ci-failure-Tynbpb`，run37934872845。
+- 随后唯一fixer实证 GNU stat -f 失败前输出 filesystem 文本，原命令替换将其拼入 mtime；独立捕获失败probe后用GNUmtime覆盖，确定性污染stub RED→GREEN，真实本机gstat隔离严格矩阵通过。两原窄review/simplify无新增阻塞，不代表LinuxCI成功。
+- fixer新冻结12e81c284e1d84382d2f5d62ab60170ce7226d4b，已jj new离开；主核完整SHA、与已审3c485d仅notes差异、身份/祖先/空child后串行合入。主重新独立实跑529/0、92files、6648assert，typecheck/build exit0。仅canary/tests/notes变更，不重做已经完成的UI最终批；Linux新CI仍须推送后独立读取。
 - Draft PR #22已更新失败与真实边界并readback。Spec #1、#12、#19新增评论并独立读回；所有21票仍 OPEN + ready-for-agent，不close、转人工或标PR ready。
 - 原始freeze/WIP/stale/私有备份保留；space1已finish，自建QA监听18790已停止，最终UI不再重复polish。CI脚本局部修复不要求重做UI批。
 
