@@ -12,6 +12,9 @@ describe("ReplyComposer", () => {
   test("renders a labeled multiline composer, explicit send button, and quick reply chips", () => {
     const markup = renderToStaticMarkup(<ReplyComposer draft="draft" onDraftChange={() => {}} onSend={() => {}} />);
     expect(markup).toContain('aria-label="Quick replies"');
+    const quickButtons = markup.match(/<button[^>]+class="[^"]*rounded-full[^"]*"/g) ?? [];
+    expect(quickButtons).toHaveLength(3);
+    for (const button of quickButtons) expect(button).toContain("min-h-11");
     expect(markup).toContain('id="reply-draft"');
     expect(markup).toContain("<textarea");
     expect(markup).toContain(">Send</button>");

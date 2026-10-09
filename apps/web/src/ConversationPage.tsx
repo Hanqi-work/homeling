@@ -21,7 +21,7 @@ import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { TaskChip } from "./TaskChip.tsx";
 import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
-import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
+import { guardUnknownRetry, createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
 import { useSessionSnapshot } from "./SessionBoundary.tsx";
 import { sessionState } from "./session-state.ts";
@@ -279,9 +279,38 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
     }
   }
 
-  function sendMessage(text: string, existing?: OutgoingMessage): void {
+  const retryLifetime = useRef(new AbortController());
+  useEffect(() => {
+    const lifetime = new AbortController(); retryLifetime.current = lifetime;
+    return () => lifetime.abort();
+  }, []);
+  const retryCheckingIds = useRef(new Set<string>());
+  async function retryGuard(message: OutgoingMessage, confirm: boolean, check: () => void, signal: AbortSignal): Promise<boolean> {
+    return guardUnknownRetry({
+      admit: () => check, signal,
+      refresh: async () => {
+        const response = await fetchPaneHistory(paneId, AbortSignal.any([signal, AbortSignal.timeout(10_000)]), undefined, occurrenceKey);
+        signal.throwIfAborted();
+        check();
+        if (!response.available) throw new Error("History unavailable");
+        receiveHistory(response, ++requestSequence.current);
+      },
+      isConfirmed: () => confirmedMessageIds.current.has(message.id) || historyRef.current.outgoing.some(item => item.id === message.id && !!item.matchedUuid),
+      confirm: confirm ? () => window.confirm(t("task.unknownRetryConfirm")) : undefined,
+    });
+  }
+  async function sendMessage(text: string, existing?: OutgoingMessage): Promise<void> {
     if (controlBlockedRef.current || (sendBlockedRef.current && !existing)) return;
-    if (existing && queuedMessageIds.current.has(existing.id)) return;
+    if (existing && (queuedMessageIds.current.has(existing.id) || retryCheckingIds.current.has(existing.id))) return;
+    const lifetime = retryLifetime.current.signal;
+    let check: () => void;
+    try { check = sessionState.admit(); } catch { return; }
+    if (existing?.deliveryUnknown && !existing.textDelivered) {
+      retryCheckingIds.current.add(existing.id);
+      const allowed = await retryGuard(existing, true, check, lifetime);
+      retryCheckingIds.current.delete(existing.id);
+      if (!allowed || controlBlockedRef.current) return;
+    }
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
       : {
@@ -313,6 +342,12 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         return confirmed;
       },
       async () => {
+        if (lifetime.aborted) return;
+        try { check(); } catch { return; }
+        if (existing?.deliveryUnknown && !existing.textDelivered && !await retryGuard(existing, false, check, lifetime)) {
+          if (!confirmedMessageIds.current.has(existing.id)) dispatch({ type: "outgoing-failed", paneId, id: existing.id, textDelivered: null });
+          return;
+        }
         const attemptOrder = ++sendAttemptSequence.current;
         outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
           ? { ...message, attemptOrder, retryQueued: false }

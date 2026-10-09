@@ -4,6 +4,7 @@
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
 import { checkAccess, isLoopbackAddress, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import { safeErrorCode } from "./safe-error.ts";
 import type { PaneWire } from '@homeling/contracts';
 import { dirname, join } from "node:path";
 import { ActivityLedger, TaskOccurrenceUnavailable } from "./activity-ledger.ts";
@@ -13,7 +14,7 @@ import { controlKeyBlocksText, sendControlKey } from "./control-key.ts";
 import { BROWSER_API_PREFIX, proxyBridgeRequest, proxyTargetUrl, type BridgeFetch } from "./bridge-proxy.ts";
 import { approvePendingRequest, collectPendingRequests, PendingRequestStore } from "./requests.ts";
 import { serveStatic, type StaticDir } from "./static.ts";
-import { HerdrRpcError, HerdrSocketClient } from "./herdr-client.ts";
+import { HerdrSocketClient } from "./herdr-client.ts";
 import { handleMemoryRequest, isMemoryPath } from "./memory-routes.ts";
 import { PersonaRegistry } from "./persona-registry.ts";
 import {
@@ -229,7 +230,7 @@ export async function handleRequest(
     } catch (error) {
       if (error instanceof SessionLocked) return sessionRefusal();
       if (error instanceof TaskOccurrenceUnavailable) return stale();
-      return Response.json({ error: error instanceof Error ? error.message : "Task unavailable", code: "task.unavailable" }, { status: 502 });
+      return Response.json({ error: "Task unavailable", code: "task.unavailable" }, { status: 502 });
     }
   }
   const activityMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/activity$/);
@@ -249,7 +250,7 @@ export async function handleRequest(
       if (!task) return Response.json({ error: "task occurrence not found" }, { status: 404 });
       return Response.json(task, { headers: { "cache-control": "no-store" } });
     } catch (error) {
-      return Response.json({ error: error instanceof Error ? error.message : "Activity unavailable" }, { status: 502 });
+      return Response.json({ error: "Activity unavailable" }, { status: 502 });
     }
   }
   if (isMemoryPath(pathname)) {
@@ -259,7 +260,7 @@ export async function handleRequest(
     try {
       return Response.json({ personas: await listPersonas(runtime) });
     } catch (error) {
-      return Response.json({ error: error instanceof Error ? error.message : "Herdr snapshot unavailable", code: error instanceof HerdrRpcError ? error.code : "herdr.unavailable" }, { status: 502 });
+      return Response.json({ error: "Herdr snapshot unavailable", code: safeErrorCode(error, "herdr.unavailable") }, { status: 502 });
     }
   }
   if (pathname === API_PERSONA_PATH && req.method === "POST") {
@@ -271,7 +272,7 @@ export async function handleRequest(
       return Response.json({ persona: { ...persona, status: "active" } }, { status: 201 });
     } catch (error) {
       if (error instanceof SessionLocked) return sessionRefusal();
-      return Response.json({ error: error instanceof Error ? error.message : "Persona creation failed", code: error instanceof HerdrRpcError ? error.code : "persona.create_failed" }, { status: 502 });
+      return Response.json({ error: "Persona creation failed", code: safeErrorCode(error, "persona.create_failed") }, { status: 502 });
     }
   }
   const personaMessageMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)\/message$/);
@@ -284,7 +285,7 @@ export async function handleRequest(
     let id: string;
     try { id = decodeURIComponent(personaMessageMatch[1]!); } catch { return Response.json({ error: "invalid persona id" }, { status: 400 }); }
     try { return await sendPersonaMessage(runtime, id, body.text, req.headers.get("tailscale-user-login"), admission!); }
-    catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Message delivery failed", code: "persona.message_failed" }, { status: 502 }); }
+    catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: "Message delivery failed", code: "persona.message_failed" }, { status: 502 }); }
   }
   const personaMatch = pathname.match(/^\/lite\/api\/persona\/([^/]+)$/);
   if (personaMatch && (req.method === "PATCH" || req.method === "DELETE")) {
@@ -297,12 +298,12 @@ export async function handleRequest(
       try {
         const persona = await updatePersona(runtime, id, patch, admission!);
         return persona ? Response.json({ persona }) : Response.json({ error: "persona not found" }, { status: 404 });
-      } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Persona update failed", code: "persona.update_failed" }, { status: 502 }); }
+      } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: "Persona update failed", code: "persona.update_failed" }, { status: 502 }); }
     }
     try {
       const result = await deletePersona(runtime, id, admission!);
       return result.deleted ? Response.json(result) : Response.json({ error: "persona not found" }, { status: 404 });
-    } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: error instanceof Error ? error.message : "Persona delete failed", code: "persona.delete_failed" }, { status: 502 }); }
+    } catch (error) { return error instanceof SessionLocked ? sessionRefusal() : Response.json({ error: "Persona delete failed", code: "persona.delete_failed" }, { status: 502 }); }
   }
   if (isPersonaWrite(pathname) && req.method !== "POST" && req.method !== "PATCH" && req.method !== "DELETE") {
     return new Response("method not allowed\\n", { status: 405, headers: { allow: "GET, POST, PATCH, DELETE" } });
@@ -405,7 +406,7 @@ export async function handleRequest(
       try { return await launchPersonaTask(runtime, body.personaId, body.command, req.headers.get("tailscale-user-login"), admission!); }
       catch (error) {
         if (error instanceof SessionLocked) return sessionRefusal();
-        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: "launch.failed" }, { status: 502 });
+        return Response.json({ ok: false, error: "Task launch failed", code: "launch.failed" }, { status: 502 });
       }
     }
   }
@@ -455,7 +456,7 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
   const activityObserver = createActivityObserver(runtime.activity!, runtime.herdr, system.activityObserve);
   runtime.observeTask = (paneId) => activityObserver.watch(paneId);
   void recoverPersonas(runtime, system.personaRecovery).catch((error: unknown) => {
-    console.error(`[homeling-daemon] persona recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[homeling-daemon] persona recovery unavailable: ${safeErrorCode(error, "persona.recovery_failed")}`);
   });
   createEventObserver(runtime, system.personaRecovery);
   console.log(`[homeling-daemon] listening on http://${cfg.hostname}:${cfg.port} serving ${cfg.webDist} at /lite/`);

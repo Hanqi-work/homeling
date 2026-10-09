@@ -14,7 +14,9 @@
 - 继任 fixer 实际回执：七文件 WIP 与备份 MATCH；runtime 从复现 23/3 修到窄测 26/0；手动锁确认新增实际 AppRoot 交互回归通过。尚无最终 fulltests/typecheck/build 或合入证据，不能据此宣称全部修复。
 - 窄顾问实际结论：#6 缺 launch 操作持久结果/终态清理确认；#9 缺原子 prompt-generation 校验并写键及 Cmd 契约；#16 缺可信 request generation 与可恢复事件游标。现 zero-touch 上游公共接口不足以证明相关 AC；已传唯一 fixer 补守卫公共入口回归，不通过猜测或放宽安全伪造闭环。
 - PR #22 已更新并读回上述验收矩阵摘要、runtime 26/0 和能力阻塞，保持 draft。修复后全量验证、最终 UI 确认和新 tip CI 仍待执行。
-- 浏览器只读恢复确认既有 space1/p1、ownership=agent；未启动最终 UI 确认批，不创建新空间，不碰用户 tabs。
+- 最终 fixer 冻结 0e5c113e42e9f1b81b0285e543d1c7ea80eb7f1d，并 jj new 离开到空 child；主核身份、祖先、审查末 delta（与04f4846仅notes差异）、备份hash后串行合入，保留主纠错记录。主实际复验 528 tests / 0 fail、92files、6638assert；typecheck/build exit0。不是沿用实施者结果。
+- 浏览器复用 space1/p1、ownership=agent，最新 dist 一批最终确认：快捷回复44px、Save真实Tab聚焦自动滚动避fixed nav；锁POST公开模拟失败时server unlocked、UI持续未确认告警；原对话idle-lock解锁保留草稿/路径且零重放；德语设置/新建、triage两人→模拟审批后1人、任务详情/raw mirror、unknown Retry原生风险确认取消及history503都不重发。截图与详细边界 `/private/tmp/homeling-final-ui-confirm-WmdEZ4/CONFIRMATION.md`。
+- UI-only契约check/三套verify通过；公开fake无真实auth/handler/provider/设备保证。机械detector仅跑一次，变更五个TSX/CSS目标结果[]。locator/原生dialog属性/stale ref造成的自动化错误均先观察，不报告为产品失败。不创建新space、不碰用户tabs，不继续polish。
 
 ## Deviations
 - 原同 ID fixer 无法通过当前会话接口恢复；按用户最新继续实施要求，唯一继任实施者保留现场续接，未覆盖或删除原成果。不能将其描述为原 agent 成功恢复。

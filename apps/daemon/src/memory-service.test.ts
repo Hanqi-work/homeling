@@ -105,7 +105,7 @@ test("unsupported kind prefixes only its first message using launch-time memory,
   const response = await sendPersonaMessage(f.runtime, persona.id, userText, null, f.admission);
   const body = await response.json();
   expect(f.replies[0]).toContain("Lives in Guangzhou"); expect(f.replies[0]).not.toContain("Lives in Shenzhen");
-  expect(body).toMatchObject({ personaConfirmationText: f.replies[0], memoryInjection: { unsupported: true }, personaMessagePresentation: { displayText: userText, confirmationText: f.replies[0], historyBinding: "required" } });
+  expect(body).toMatchObject({ personaConfirmationText: f.replies[0], memoryInjection: { unsupported: true }, personaMessagePresentation: { displayText: userText, confirmationText: f.replies[0], historyBinding: "unbound" } });
   await sendPersonaMessage(f.runtime, persona.id, "Next", null, f.admission);
   expect(f.replies[1]).toBe("Next");
 });
@@ -120,6 +120,26 @@ test("unknown injected delivery remains sticky across unlock and daemon runtime 
   const restarted = { ...f.runtime, registry: new PersonaRegistry(f.runtime.cfg.registryPath) };
   const retry = await sendPersonaMessage(restarted, persona.id, "Hello", null, nextAdmission);
   expect(retry.status).toBe(409); expect(f.replies).toHaveLength(1);
+});
+
+test("creation failures persist a safe orphan reason and expose no raw upstream error", async () => {
+  const f = await fixture("claude");
+  const marker = "SYNTHETIC_PRIVATE_ERROR_TOKEN";
+  f.runtime.herdr.sendText = async () => { throw new Error(marker); };
+  await expect(createPersona(f.runtime, { name: "Mira", avatar: { color: "#86efac" } }, null, f.admission)).rejects.not.toThrow(marker);
+  expect(await readFile(f.runtime.cfg.registryPath, "utf8")).not.toContain(marker);
+  expect((await f.runtime.registry.load()).orphans).toHaveLength(1);
+});
+
+test("injected partial replies preserve unknown semantics without forwarding arbitrary error fields", async () => {
+  const f = await fixture("claude");
+  const persona = await createPersona(f.runtime, { name: "Mira", avatar: { color: "#86efac" }, systemPrompt: "Be kind" }, null, f.admission);
+  const marker = "SYNTHETIC_PRIVATE_ERROR_TOKEN";
+  f.onReply(async () => Response.json({ ok: false, error: marker, code: marker, textDelivered: true, extra: marker }, { status: 502 }));
+  const response = await sendPersonaMessage(f.runtime, persona.id, "Hello", null, f.admission);
+  expect(await response.clone().text()).not.toContain(marker);
+  expect(await response.json()).toMatchObject({ ok: false, textDelivered: true });
+  expect((await f.runtime.registry.get(persona.id))?.memoryDeliveryUnknown).toBe(true);
 });
 
 test("a lock reached during shell readiness prevents the memory launcher from dispatching", async () => {

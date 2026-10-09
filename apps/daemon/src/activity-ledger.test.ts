@@ -16,6 +16,19 @@ async function fixture() {
   return { path, ledger: new ActivityLedger(path), admission: lock.admission(lock.admit(token, "test")), observer: createDaemonSystemAdmissions().activityObserve, lock, token };
 }
 
+test("subscriber failure logs a fixed event without raw upstream text while keeping the committed task", async () => {
+  const { ledger, admission } = await fixture();
+  const marker = "SYNTHETIC_ACTIVITY_PRIVATE_TOKEN";
+  const original = console.error, logs: unknown[][] = [];
+  console.error = (...args) => { logs.push(args); };
+  ledger.subscribe(() => { throw new Error(marker); });
+  try {
+    await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, admission);
+    expect(logs).toHaveLength(1);
+    expect(logs.flat().map(String).join(" ")).not.toContain(marker);
+    expect((await ledger.list()).events).toHaveLength(1);
+  } finally { console.error = original; }
+});
 test("validated real status transitions complete once, exit without outcome is unknown", async () => {
   const { ledger, admission, observer, path } = await fixture();
   const first = await ledger.register({ personaId: "a", spaceId: "s", paneId: "p", title: "Build" }, admission);

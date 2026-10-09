@@ -1,6 +1,27 @@
 import { sessionState } from "./session-state.ts";
 
 export type SendOperation = () => Promise<void>;
+/** Refresh is read-only. A failed read or expired original lease cannot authorize a resend. */
+export async function guardUnknownRetry(options: {
+  admit: () => (() => void);
+  refresh: () => Promise<void>;
+  isConfirmed: () => boolean;
+  confirm?: () => boolean;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  try {
+    options.signal?.throwIfAborted();
+    const check = options.admit();
+    await options.refresh();
+    options.signal?.throwIfAborted();
+    check();
+    if (options.isConfirmed()) return false;
+    if (options.confirm && !options.confirm()) return false;
+    options.signal?.throwIfAborted();
+    check();
+    return true;
+  } catch { return false; }
+}
 export interface DeferredSendQueue {
   enqueue(id: string, operation: SendOperation): Promise<void>;
   block(id: string): void;

@@ -70,6 +70,55 @@ async function mount(path = "/p/p1", settings: ReactNode = <button data-other-se
   await act(async () => root.render(<LocaleProvider><MemoryRouter initialEntries={[path]}><Location />{path !== "/settings" ? <LanguageSettings /> : null}<AppRoot slots={{ settings }} /></MemoryRouter></LocaleProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
 }
+test.each(["/p/p1", "/t/p1"])("unknown retry refresh for %s cannot prompt or send after its page unmounts", async (path) => {
+  let writes = 0, gated = false, confirmations = 0;
+  const read = Promise.withResolvers<Response>();
+  fakeServer(async () => { writes++; return Response.json({ ok: false, deliveryUnknown: true }, { status: 502 }); });
+  const transport = globalThis.fetch, originalConfirm = Object.getOwnPropertyDescriptor(window, "confirm");
+  Object.defineProperty(window, "confirm", { configurable: true, value: () => { confirmations++; return true; } });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/history") && gated) return read.promise;
+    if (url.endsWith("/snapshot")) return Response.json({ bridge: "connected", agents: [{ paneId: "p1", paneLabel: "Task", workspaceId: "s1", tabId: "t1", status: "working", agentKind: "claude" }], shellPanes: [], workspaces: [], tabs: [], sessions: [], ts: Date.now() });
+    return transport(input, init);
+  }) as typeof fetch;
+  try {
+    await mount(path); await unlock();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(() => { Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "retry safely"); textarea.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event); });
+    await act(async () => textarea.closest("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    expect(writes).toBe(1);
+    gated = true;
+    const retry = [...container.querySelectorAll("button")].find(item => item.textContent === "Retry")!;
+    await act(() => retry.click());
+    await act(() => root.unmount());
+    await act(async () => { read.resolve(Response.json({ paneId: "p1", available: true, entries: [], hasMore: false, total: 0, fileTruncated: false })); });
+    expect(confirmations).toBe(0); expect(writes).toBe(1);
+  } finally { if (originalConfirm) Object.defineProperty(window, "confirm", originalConfirm); else Reflect.deleteProperty(window, "confirm"); }
+});
+test("failed manual server lock keeps drafts fail-closed and visibly unconfirmed until a locked read", async () => {
+  fakeServer(async () => { throw new Error("unexpected message write"); });
+  const transport = globalThis.fetch;
+  let serverLocked = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/session/lock")) throw new Error("connection lost");
+    if (String(input).endsWith("/session") && serverLocked) return Response.json({ locked: true, available: true, epoch: 2, generation: "boot" });
+    return transport(input, init);
+  }) as typeof fetch;
+  await mount("/settings"); await unlock();
+  const lock = [...container.querySelectorAll("button")].find(item => item.textContent === "Lock Homeling")!;
+  await act(async () => lock.click());
+  expect(sessionState.get().locked).toBe(true);
+  expect(container.textContent).toContain("Server lock is not confirmed");
+  const check = () => [...container.querySelectorAll("button")].find(item => item.textContent === "Check session again")!;
+  await act(async () => check().click());
+  expect(container.textContent).toContain("Server lock is not confirmed");
+  expect(sessionState.get().ready).toBe(false);
+  serverLocked = true;
+  await act(async () => check().click());
+  expect(container.textContent).not.toContain("Server lock is not confirmed");
+  expect(container.textContent).toContain("Homeling is locked");
+});
 test("a failed native-language update remains visible across remount and does not replay on unlock", async () => {
   const descriptor = Object.getOwnPropertyDescriptor(window.navigator, "serviceWorker");
   const worker = { scope: `${window.location.origin}/lite/`, active: {}, pushManager: { getSubscription: async () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/existing" }) } };
@@ -193,7 +242,8 @@ test("production root retains its real draft and route across locale and session
   expect(textarea.value).toBe("My original draft 请继续");
   await act(() => sessionState.lock());
   await changeLocale("de");
-  expect(container.querySelector("#homeling-lock-title")?.textContent).toBe("Homeling ist gesperrt");
+  expect(container.querySelector("#homeling-lock-title")?.textContent).toBe("Dieser Browser ist blockiert");
+  expect(container.textContent).toContain("Serversperre nicht bestätigt");
   expect(textarea.value).toBe("My original draft 请继续");
   await unlock();
   expect(container.querySelector("textarea")).toBe(textarea);

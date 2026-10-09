@@ -6,12 +6,12 @@
  * own scope). Bump SW_VERSION to ship an update: activate deletes stale caches, and the page
  * learns about the waiting worker via registration.waiting (see src/pwa/register-sw.ts).
  *
- * Caching policy (spec mirrors src/sw/strategy.ts, which holds the unit-tested pure logic):
+ * Caching policy (tested through this actual worker entrypoint):
  * - /api/* and /lite/api/*: bypass — never cached, never short-circuited (polling endpoints).
  * - app shell (/lite/index.html, /lite/assets/*): cache-first.
  * - navigations (deep links / refresh): network-first, cached shell as offline fallback.
  */
-const SW_VERSION = "v2-push";
+const SW_VERSION = "v3-safe-cache";
 const CACHE_PREFIX = "homeling-lite";
 const SHELL_CACHE = `${CACHE_PREFIX}-shell-${SW_VERSION}`;
 const NAV_CACHE = `${CACHE_PREFIX}-nav-${SW_VERSION}`;
@@ -50,8 +50,12 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then(async (response) => {
-          const cache = await caches.open(NAV_CACHE);
-          cache.put("/lite/", response.clone());
+          if (response.ok) {
+            try {
+              const cache = await caches.open(NAV_CACHE);
+              await cache.put("/lite/", response.clone());
+            } catch { /* Cache quota/availability must not replace a successful network response. */ }
+          }
           return response;
         })
         .catch(async () => {
@@ -72,8 +76,12 @@ self.addEventListener("fetch", (event) => {
         (cached) =>
           cached ??
           fetch(event.request).then(async (response) => {
-            const cache = await caches.open(SHELL_CACHE);
-            cache.put(event.request, response.clone());
+            if (response.ok) {
+              try {
+                const cache = await caches.open(SHELL_CACHE);
+                await cache.put(event.request, response.clone());
+              } catch { /* Successful build assets remain usable even when cache storage refuses them. */ }
+            }
             return response;
           }),
       ),

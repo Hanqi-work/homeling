@@ -212,6 +212,24 @@ describe("proxyTargetUrl", () => {
     expect(await response.json()).toEqual({ ok: false, error: "Bridge unavailable", code: "bridge.unavailable" });
   });
 
+  test("upstream failures expose only safe outcome fields, never raw body or headers", async () => {
+    const marker = "SYNTHETIC_SECRET_HEADER_TOKEN";
+    for (const [path, method] of [["snapshot", "GET"], ["stt", "POST"], ["pane/w1:p2/reply", "POST"]] as const) {
+      const response = await proxyBridgeRequest(new Request(`http://daemon.test/lite/api/${path}`, {
+        method, ...(method === "POST" ? { headers: { "content-type": path === "stt" ? "audio/webm" : "application/json" }, body: path === "stt" ? "audio" : '{}' } : {}),
+      }), cfg, async () => Response.json({ ok: false, error: marker, code: marker, textDelivered: true, deliveryUnknown: true, extra: marker }, { status: 502, headers: { etag: marker } }));
+      expect(response.status).toBe(502);
+      expect(await response.clone().text()).not.toContain(marker);
+      expect(response.headers.get("etag")).toBeNull();
+      if (path.endsWith("reply")) expect(await response.json()).toMatchObject({ ok: false, textDelivered: true, deliveryUnknown: true });
+    }
+  });
+
+  test("a proven undispatched upstream refusal stays definite after sanitization", async () => {
+    const response = await proxyBridgeRequest(new Request("http://daemon.test/lite/api/pane/p1/reply", { method: "POST", headers: { "content-type": "application/json" }, body: '{}' }), cfg,
+      async () => Response.json({ ok: false, executed: false, deliveryUnknown: false, error: "SYNTHETIC_PRIVATE_TOKEN" }, { status: 409 }));
+    expect(await response.json()).toMatchObject({ executed: false, deliveryUnknown: false });
+  });
   test("POST reply forwards the exact validated URL and raw JSON body", async () => {
     const body = '{"text":"hello\n世界","submit":true,"expected_prompt":"prompt"}';
     let fetchUrl = "";

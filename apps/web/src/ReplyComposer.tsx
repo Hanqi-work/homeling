@@ -74,7 +74,7 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
             type="button"
             disabled={disabled}
             onClick={() => selectQuickReply(t(key), changeDraft)}
-            className="shrink-0 rounded-full border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-700 hover:text-green-200"
+            className="min-h-11 shrink-0 rounded-full border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-700 hover:text-green-200"
           >
             {t(key)}
           </button>

@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { safeErrorCode, safeUpstreamFailure } from "./safe-error.ts";
 import { PersonaMemoryStore } from "./persona-memory.ts";
 import { memoryInjectionPlan } from "./memory-injection.ts";
 import { prepareMemorySession, memoryMessageText, injectedMessagePresentation } from "./session-memory.ts";
@@ -119,7 +120,7 @@ export async function createPersona(
       await runtime.registry.addOrphan({
         spaceId: "unknown",
         createdAt: new Date().toISOString(),
-        reason: `workspace.create outcome unknown: ${error.message}`,
+        reason: `workspace.create outcome unknown: ${safeErrorCode(error, "persona.create_failed")}`,
       });
     }
     throw error;
@@ -133,14 +134,14 @@ export async function createPersona(
     try {
       await runtime.herdr.closePane(space.root_pane.pane_id);
     } catch (rollback) {
-      rollbackError = `; pane rollback failed: ${rollback instanceof Error ? rollback.message : String(rollback)}`;
+      rollbackError = `; pane rollback failed: ${safeErrorCode(rollback, "pane.rollback_failed")}`;
     }
     // Herdr exposes no workspace.close RPC; persist the empty/partial space as an orphan for later cleanup.
     await runtime.registry.addOrphan({
       spaceId: space.workspace_id,
       paneId: rollbackError ? space.root_pane.pane_id : undefined,
       createdAt: new Date().toISOString(),
-      reason: `persona create failed: ${error instanceof Error ? error.message : String(error)}${rollbackError}`,
+      reason: `persona create failed: ${safeErrorCode(error, "persona.create_failed")}${rollbackError}`,
     });
     const message = `Could not start persona pane; created space is marked for cleanup${rollbackError}`;
     if (error instanceof SessionLocked) throw error;
@@ -172,7 +173,7 @@ export async function createPersona(
       spaceId: space.workspace_id,
       ...(paneStillOpen ? { paneId: space.root_pane.pane_id } : {}),
       createdAt: new Date().toISOString(),
-      reason: `registry commit failed: ${error instanceof Error ? error.message : String(error)}`,
+      reason: `registry commit failed: ${safeErrorCode(error, "operation.failed")}`,
     });
     throw error;
   }
@@ -204,7 +205,7 @@ export function updatePersona(
       if (renamed) {
         try { await runtime.herdr.renameSpace(current.spaceId, current.name); }
         catch (rollback) {
-          console.error(`[homeling-daemon] failed to restore space name after registry update failure: ${rollback instanceof Error ? rollback.message : String(rollback)}`);
+          console.error(`[homeling-daemon] failed to restore space name after registry update failure: ${safeErrorCode(rollback, "operation.rollback_failed")}`);
         }
       }
       throw error;
@@ -235,7 +236,7 @@ export function deletePersona(runtime: PersonaRuntime, id: string, admission: Mu
         await admission.dispatch(() => runtime.herdr.renameSpace(persona.spaceId, `[Archived] ${persona.name}`));
       } catch (error) {
         archived = false;
-        console.error(`[homeling-daemon] persona deleted but space archive rename failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`[homeling-daemon] persona deleted but space archive rename failed: ${safeErrorCode(error, "operation.failed")}`);
       }
       // Result settlement for this already-closed pane must persist its tombstone even if the
       // initiating lease expired, otherwise system recovery could resurrect the deleted persona.
@@ -297,7 +298,7 @@ export function sendPersonaMessage(
       }
       return Response.json({
         ok: false, deliveryUnknown: true, personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection,
-        error: error instanceof Error ? error.message : "Message delivery outcome unknown",
+        error: "Message delivery outcome unknown",
       }, { status: 502 });
     }
     const outcome = await response.clone().json().catch(() => null) as Record<string, unknown> | null;
@@ -310,16 +311,11 @@ export function sendPersonaMessage(
     } catch {
       return Response.json({ ok: false, deliveryUnknown: true, personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection, error: "Message was dispatched but its injection outcome could not be persisted; reconcile before retrying" }, { status: 503 });
     }
-    if (accepted || partial) {
-      const headers = new Headers(response.headers);
-      headers.set("content-type", "application/json; charset=utf-8");
-      return new Response(JSON.stringify({
-        ...(outcome ?? { ok: false, error: `Message delivery outcome unknown (${response.status})` }),
-        ...(partial && !textDelivered ? { deliveryUnknown: true } : {}),
-        personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection,
-      }), { status: response.status, statusText: response.statusText, headers });
-    }
-    return response;
+    return Response.json({
+      ...(accepted ? { ok: true, ...(textDelivered ? { textDelivered: true } : {}) } : safeUpstreamFailure(outcome, "Message delivery failed", "reply.failed", partial)),
+      ...(partial && !textDelivered ? { deliveryUnknown: true } : {}),
+      personaConfirmationText: submittedText, personaMessagePresentation, memoryInjection,
+    }, { status: response.status });
   });
 }
 
@@ -340,7 +336,7 @@ export function launchPersonaTask(
   try {
     launchers = await getLaunchers(runtime.cfg, runtime.fetcher, login);
   } catch (error) {
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Launcher allowlist unavailable", code: "launch.allowlist_unavailable" }, { status: 502 });
+    return Response.json({ ok: false, error: "Launcher allowlist unavailable", code: "launch.allowlist_unavailable" }, { status: 502 });
   }
   const launcher = launchers.launchers.find((row) => row.command === command);
   if (!launcher) return Response.json({ ok: false, error: "Launcher is not allowlisted", code: "launch.not_allowlisted" }, { status: 400 });
@@ -363,8 +359,8 @@ export function launchPersonaTask(
   } catch (error) {
     const unknown = error instanceof SessionLocked || error instanceof HerdrRpcError && ["herdr.timeout", "herdr.unavailable", "herdr.protocol", "herdr.agent_start_timeout"].includes(error.code);
     if (occurrenceKey && !unknown) {
-      try { await runtime.activity!.fail(occurrenceKey, `Task launch failed: ${error instanceof Error ? error.message : String(error)}`, admission); }
-      catch (registrationError) { console.error("[homeling-daemon] could not register task launch failure", registrationError); }
+      try { await runtime.activity!.fail(occurrenceKey, `Task launch failed: ${safeErrorCode(error, "operation.failed")}`, admission); }
+      catch (registrationError) { console.error("[homeling-daemon] could not register task launch failure", safeErrorCode(registrationError, "activity.persistence_failed")); }
     }
     let paneStillOpen = false;
     if (tabPane) {
@@ -375,10 +371,10 @@ export function launchPersonaTask(
       spaceId: persona.spaceId,
       ...(tabPane && paneStillOpen ? { paneId: tabPane.pane_id } : {}),
       createdAt: new Date().toISOString(),
-      reason: `task launch failed: ${error instanceof Error ? error.message : String(error)}`,
+      reason: `task launch failed: ${safeErrorCode(error, "operation.failed")}`,
     });
     if (error instanceof SessionLocked) throw error;
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Task launch failed", code: error instanceof HerdrRpcError ? error.code : "launch.failed", ...(unknown ? { deliveryUnknown: true } : {}) }, { status: 502 });
+    return Response.json({ ok: false, error: "Task launch failed", code: safeErrorCode(error, "launch.failed"), ...(unknown ? { deliveryUnknown: true } : {}) }, { status: 502 });
   }
   const snapshot = await runtime.herdr.snapshot().catch(() => null);
   const workspaceLabel = snapshot?.workspaces.find((space) => space.workspace_id === persona.spaceId)?.label ?? persona.name;
@@ -425,7 +421,7 @@ async function recoverPersona(runtime: PersonaRuntime, id: string, admission: Sy
     let launchers: LauncherList;
     try { launchers = await getLaunchers(runtime.cfg, runtime.fetcher); }
     catch (error) {
-      console.error(`[homeling-daemon] recovery launcher allowlist unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[homeling-daemon] recovery launcher allowlist unavailable: ${safeErrorCode(error, "operation.failed")}`);
       return;
     }
     const launcher = launchers.launchers.find((item) => item.command === persona.launcherCommand);
@@ -458,7 +454,7 @@ async function recoverPersona(runtime: PersonaRuntime, id: string, admission: Sy
         spaceId: persona.spaceId,
         ...(recoveredPane && paneStillOpen ? { paneId: recoveredPane.pane_id } : {}),
         createdAt: new Date().toISOString(),
-        reason: `main pane recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+        reason: `main pane recovery failed: ${safeErrorCode(error, "operation.failed")}`,
       });
     }
   });
@@ -471,7 +467,7 @@ async function performRecovery(runtime: PersonaRuntime, admission: SystemAdmissi
     const workspace = snapshot.workspaces.find((item) => item.workspace_id === archived.spaceId);
     if (!workspace || workspace.label.startsWith("[Archived]")) continue;
     try { await admission.dispatch(() => runtime.herdr.renameSpace(archived.spaceId, `[Archived] ${archived.personaName}`)); }
-    catch (error) { console.error(`[homeling-daemon] could not mark archived space ${archived.spaceId}: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { console.error(`[homeling-daemon] could not mark archived space ${archived.spaceId}: ${safeErrorCode(error, "operation.failed")}`); }
   }
   for (const persona of await runtime.registry.list()) await recoverPersona(runtime, persona.id, admission);
 }
@@ -482,7 +478,7 @@ export function createEventObserver(runtime: PersonaRuntime, admission: SystemAd
   let stream: { close(): void } | undefined;
   const reconcile = () => {
     void recoverPersonas(runtime, admission).catch((error: unknown) => {
-      console.error(`[homeling-daemon] persona reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[homeling-daemon] persona reconciliation failed: ${safeErrorCode(error, "operation.failed")}`);
     });
   };
   const reconcileTimer = setInterval(reconcile, 30_000);

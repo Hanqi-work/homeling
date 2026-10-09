@@ -56,6 +56,33 @@ describe("documented deployment commands", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+  test("actual canary shell checks protected state and refuses unreadable Git status or ambiguous roots", async () => {
+    const home = await mkdtemp(join(tmpdir(), "homeling-canary-entry-"));
+    try {
+      const bin = join(home, "bin"), collie = join(home, "collie"), state = join(home, "baseline.env");
+      await mkdir(bin); await mkdir(join(collie, "bin"), { recursive: true });
+      await writeFile(join(collie, "bin/collie"), "protected binary");
+      await writeFile(join(bin, "git"), '#!/bin/sh\ncase "$3" in rev-parse) printf "abc123\\n";; status) [ "${FAKE_GIT_FAILED:-0}" = 0 ] || exit 1; printf "%s" "${FAKE_GIT_DIRTY:-}";; *) exit 2;; esac\n', { mode: 0o755 });
+      await writeFile(join(bin, "tailscale"), '#!/bin/sh\nprintf "%s" "$FAKE_SERVE"\n', { mode: 0o755 });
+      await writeFile(join(bin, "bun"), `#!/bin/sh\nexec '${process.execPath}' --no-env-file "$@"\n`, { mode: 0o755 });
+      const base = { PATH: `${bin}:/usr/bin:/bin`, HOME: home, COLLIE_DIR: collie, HOMELING_CANARY_STATE: state, FAKE_SERVE: JSON.stringify({ Web: { "node:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:8787" } } } } }) };
+      const run = async (action: string, extra = {}) => {
+        const child = Bun.spawn(["bash", join(root, "scripts/canary.sh"), action], { env: { ...base, ...extra }, stdout: "pipe", stderr: "pipe" });
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]); return { code, stdout, stderr };
+      };
+      expect((await run("save")).code).toBe(0);
+      const original = await readFile(state, "utf8");
+      expect((await run("check")).code).toBe(0);
+      expect((await run("check", { FAKE_GIT_DIRTY: " M tracked.txt" })).code).toBe(1);
+      expect((await run("check", { FAKE_GIT_FAILED: "1" })).code).toBe(1);
+      const ambiguous = JSON.stringify({ Web: { a: { Handlers: { "/": { Proxy: "http://127.0.0.1:8787" } } }, b: { Handlers: { "/": { Proxy: "http://127.0.0.1:8787" } } } } });
+      expect((await run("check", { FAKE_SERVE: ambiguous })).code).toBe(1);
+      expect((await run("check", { FAKE_SERVE: "{}" })).code).toBe(1);
+      await writeFile(join(collie, "bin/collie"), "changed binary");
+      expect((await run("check")).code).toBe(1);
+      expect(await readFile(state, "utf8")).toBe(original);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
   test("README commands resolve to repository scripts and CI checks", async () => {
     const readme = await Bun.file(join(root, "README.md")).text();
     const commands = [...readme.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]!).join("\n");

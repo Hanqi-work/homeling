@@ -16,6 +16,7 @@ import { enqueueTaskSend, createTaskSendQueue, stopControlState, taskAvailabilit
 
 import { useSessionSnapshot } from "./SessionBoundary.tsx";
 import { sessionState } from "./session-state.ts";
+import { guardUnknownRetry } from "./send-queue.ts";
 
 interface RouteState {
   task?: Task;
@@ -190,9 +191,40 @@ function TaskConversation({ paneId, taskHint, returnTo, occurrenceKey }: { paneI
     setComposerBlocked(sendQueue.isBlocked());
   }
 
-  function sendMessage(text: string, existing?: OutgoingMessage): void {
+  const retryLifetime = useRef(new AbortController());
+  useEffect(() => {
+    const lifetime = new AbortController(); retryLifetime.current = lifetime;
+    return () => lifetime.abort();
+  }, []);
+  const retryCheckingIds = useRef(new Set<string>());
+  async function retryGuard(message: OutgoingMessage, confirm: boolean, check: () => void, signal: AbortSignal): Promise<boolean> {
+    return guardUnknownRetry({
+      admit: () => check, signal,
+      refresh: async () => {
+        const response = await fetchPaneHistory(paneId, AbortSignal.any([signal, AbortSignal.timeout(10_000)]), undefined, occurrenceKey);
+        signal.throwIfAborted();
+        check();
+        if (!response.available) throw new Error("History unavailable");
+        const action = { type: "received" as const, paneId, requestId: ++requestSequence.current, entries: response.entries, hasMore: response.hasMore, fileTruncated: response.fileTruncated };
+        historyRef.current = historyReducer(historyRef.current, action);
+        dispatch(action);
+      },
+      isConfirmed: () => historyRef.current.outgoing.some(item => item.id === message.id && !!item.matchedUuid),
+      confirm: confirm ? () => window.confirm(t("task.unknownRetryConfirm")) : undefined,
+    });
+  }
+  async function sendMessage(text: string, existing?: OutgoingMessage): Promise<void> {
     if ((composerBlocked || sendQueue.isBlocked()) && !existing) return;
-    if (existing && queuedIds.current.has(existing.id)) return;
+    if (existing && (queuedIds.current.has(existing.id) || retryCheckingIds.current.has(existing.id))) return;
+    const lifetime = retryLifetime.current.signal;
+    let check: () => void;
+    try { check = sessionState.admit(); } catch { return; }
+    if (existing?.deliveryUnknown && !existing.textDelivered) {
+      retryCheckingIds.current.add(existing.id);
+      const allowed = await retryGuard(existing, true, check, lifetime);
+      retryCheckingIds.current.delete(existing.id);
+      if (!allowed) return;
+    }
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
       : { id: `optimistic-${crypto.randomUUID()}`, text, sentAt: Date.now(), attemptOrder: ++sendAttempt.current, status: "pending" };
@@ -205,6 +237,12 @@ function TaskConversation({ paneId, taskHint, returnTo, occurrenceKey }: { paneI
     void enqueueTaskSend(sendQueue, outgoing.id,
       () => historyRef.current.outgoing.some((message) => message.id === outgoing.id && message.matchedUuid),
       async () => {
+        if (lifetime.aborted) return;
+        try { check(); } catch { return; }
+        if (existing?.deliveryUnknown && !existing.textDelivered && !await retryGuard(existing, false, check, lifetime)) {
+          if (!historyRef.current.outgoing.some(item => item.id === existing.id && item.matchedUuid)) dispatch({ type: "outgoing-failed", paneId, id: existing.id, textDelivered: null });
+          return;
+        }
         const attemptOrder = ++sendAttempt.current;
         dispatch({ type: "outgoing-attempt-started", paneId, id: outgoing.id, attemptOrder });
         try {

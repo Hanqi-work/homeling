@@ -140,11 +140,11 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 
 ## 已接线的交互与边界
 
-- **Persona / 导航 / 定制**：只列 daemon registry 管理的伙伴，不收编旧 Collie space。可创建、打开主聊、改名与选择颜色/脸/宠物；删除保留关联 space/panes 为归档，不自动终止 agent。动效依赖可观察运行状态，支持减弱动效，断连/未知不伪装 thinking。
-- **对话 / 任务 / 审批**：显式发送，history 对账后确认送达；HTTP 成功不证明 agent 消费。任务使用既有 launcher allowlist，可看详情、工具 trace、只读终端镜像并发送后续指令。过期、归属不明或历史任务不能借详情入口执行当前 pane 控制；发送结果未知不自动重试。
+- **Persona / 导航 / 定制**：只列 daemon registry 管理的伙伴，不收编旧 Collie space。可创建、打开主聊、改名与选择颜色/脸/宠物；删除会关闭该 persona 的主 pane（其中的 agent 随 pane 关闭），移除 registry 关系；关联 space 归档、task panes 保留，不会批量终止 task agent。动效依赖可观察运行状态，支持减弱动效，断连/未知不伪装 thinking。
+- **对话 / 任务 / 审批**：显式发送，history 对账后确认送达；HTTP 成功不证明 agent 消费。任务使用既有 launcher allowlist，可看详情、工具 trace、只读终端镜像并发送后续指令。过期、归属不明或历史任务不能借详情入口执行当前 pane 控制；发送结果未知不自动重试。普通 pane/task 显式重发全文前先刷新 history、确认重复风险，排队执行前再核对；已明确输入的 partial 仅重试空文本提交。persona 的持久 unknown 仍由 daemon 拒绝重放，不能用二次确认绕过。
 - **STT / 特殊键**：转写仅进入可编辑草稿，需显式发送。控制键仅提供实际协议支持的 Ctrl+C / Esc；Enter / Cmd 禁用。控制 accepted 不证明 TUI 已消费，预期 prompt 校验与上游派发也非原子操作。
 - **Triage / Activity**：首页按需处理的 registry persona 计数，同一伙伴多个请求只计一次； scoped 链接保留请求/任务身份，锁定期间暂停读取后需重新核对。Activity 持久记录可信事件与明确 launch 边界，不把临时快照拼成历史；缺失退出码、断连或不可证实的进程实例保持 unknown，历史任务提供只读降级。
-- **写锁**：空闲 15 分钟或会话绝对时长 8 小时后锁定；当前客户端使用服务端会话 admission，业务写携带从当前会话观察到的 epoch / generation 双头，缺失或旧代际拒绝写入，不能只凭新共享 cookie 恢复旧 tab 请求。读请求和后台通知不续用户租约，已运行 agent 不因锁定终止。锁定保留本地界面/草稿，但旧请求、录音或未知写结果不在解锁后自动重放。仅保护 Homeling daemon 写入口，不保护 Collie 根 API、同 origin XSS 或同 UID 进程，也不撤回已派发操作；手机后台/焦点恢复与真实 HTTPS 解锁仍须人工验收。
+- **写锁**：空闲 15 分钟或会话绝对时长 8 小时后锁定；当前客户端使用服务端会话 admission，业务写携带从当前会话观察到的 epoch / generation 双头，缺失或旧代际拒绝写入，不能只凭新共享 cookie 恢复旧 tab 请求。读请求和后台通知不续用户租约，已运行 agent 不因锁定终止。手动锁定先在本地阻止操作，只有服务器返回 locked 才显示已确认；断网或服务器未锁时明确提示其他会话仍可能修改，保留本地 fail-closed，重新检查不会自动解锁。锁定保留本地界面/草稿，但旧请求、录音或未知写结果不在解锁后自动重放。仅保护 Homeling daemon 写入口，不保护 Collie 根 API、同 origin XSS 或同 UID 进程，也不撤回已派发操作；手机后台/焦点恢复与真实 HTTPS 解锁仍须人工验收。
 
 ## 语言设置
 
@@ -157,7 +157,7 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 - 每个 persona 持久化 `facts.md`、`preferences.md`、`project.md`；纯 UTF-8 Markdown，单文件最多 24,000 字节。编辑器显式保存，使用 revision 防止不同页面互相覆盖；冲突须手动重新加载，锁拒绝保留草稿，不会解锁后自动重放。保存结果未知时先重新加载核对。
 - **只在下一次会话启动 / 首条消息时生效**。当前运行 pane 不会热吸收编辑内容；daemon 重启但仍使用同一个 pane 也不是新会话。不要为了生效直接结束正在执行的任务。
 - 支持明确的全新交互式 `pi` launcher（可含 `--model`、`--provider` 的简单参数）；daemon 在 Homeling 数据目录生成冻结的 `session-*.md`，追加官方 `--append-system-prompt '<绝对文件路径>'`。不改 pi 配置、项目 AGENTS 文件或 Collie 文件。launcher 必须先在既有 allowlist 中配置；Homeling 只扩展已选行的记忆启动参数，不接受任意新命令。
-- 其余 kind、复杂 shell wrapper 或 resume launcher 明示 **unsupported native injection**，将冻结记忆作为首条用户消息前缀降级；不是等价的 system prompt。精确注入全文仍用于 history 送达对账，不以 HTTP 成功宣称 agent 已消费。
+- 其余 kind、复杂 shell wrapper 或 resume launcher 明示 **unsupported native injection**，将冻结记忆作为首条用户消息前缀降级；不是等价的 system prompt。精确注入全文仍用于 history 送达对账，不以 HTTP 成功宣称 agent 已消费。上游未提供可信 session/entry/attempt 绑定：展示证据保持 unbound，history 原文（含注入前缀）保守保留；不按前缀、同文唯一性、时间或本地 UUID 猜测隐藏，也不宣称已完成持久注入展示闭环。
 - 原始文档与冻结文件可能含个人信息，请勿放入仓库或日志；目录 0700、文件 0600。文件损坏/非法 UTF-8/symlink/过宽权限拒绝读写，不静默替换为空。遗留 `.write-lock` 不自动抢占；确认 daemon 全部停止且没有在途写操作后由本机操作者处理。冻结文件保留供仍运行的 pi 使用，只有确认对应会话退出后才可人工清理。
 - **人工遗留**：手机进入 persona 的 Memory，编辑并保存；在已配置的真实 pi 新会话询问记忆中的事实，确认可引用；再修改并证明旧 pane 不变、新会话读取新内容；其他 kind 检查降级提示。自动测试仅用 fake Herdr/bridge 和临时文件，未运行真实 pi、未操作 Collie/秘密/服务。
 

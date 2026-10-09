@@ -36,7 +36,10 @@ export function SessionLockButton() {
   const { t } = useLocale();
   return <button type="button" className="min-h-11 rounded-xl border border-neutral-600 px-4 py-2 text-sm" onClick={() => {
     sessionState.lock();
-    void sessionRequest("lock").catch(() => {});
+    const fence = sessionState.version();
+    void sessionRequest("lock").then((next) => {
+      if (fence === sessionState.version() && next.locked) sessionState.apply(next);
+    }).catch(() => { /* The dialog explicitly reports an unconfirmed server lock. */ });
   }}>{t("session.lock")}</button>;
 }
 /** The same children/router/key stay mounted; the dialog, never a redirect, owns locked focus. */
@@ -115,7 +118,8 @@ export function SessionBoundary({ children }: { children: ReactNode }) {
   return <>
     <div inert={blocked}>{children}</div>
     <dialog ref={dialog} aria-labelledby="homeling-lock-title" onCancel={(event) => event.preventDefault()} className="m-auto w-[min(92vw,28rem)] rounded-3xl border border-neutral-700 bg-neutral-950 p-6 text-neutral-100 shadow-2xl backdrop:bg-neutral-950/95">
-      <h1 id="homeling-lock-title" className="text-xl font-semibold">{t("session.locked")}</h1>
+      <h1 id="homeling-lock-title" className="text-xl font-semibold">{t(session.lockConfirmed ? "session.locked" : "session.localOnly")}</h1>
+      {!session.lockConfirmed ? <p role="alert" className="mt-2 text-sm leading-6 text-amber-300">{t("session.lockUnconfirmed")}</p> : null}
       <p className="mt-2 text-sm leading-6 text-neutral-400">{t("session.draftsRetained")}</p>
       <form onSubmit={(event) => void unlock(event)} className="mt-5 flex flex-col gap-3">
         <label htmlFor="homeling-unlock-secret" className="text-sm">{t("session.password")}</label>
