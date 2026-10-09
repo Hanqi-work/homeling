@@ -2,7 +2,7 @@
 
 住在自己电脑上的 AI 伙伴，手机上对话、派任务、审批、查看结果。目标是 Dots / Grok Bot / Muse 式的 persona agent；基于已有 herdr / Collie，**不是 Collie fork，也不替换旧 UI**。
 
-**当前是开发中的 v1，不是正式发布。** 已接线 persona 创建与导航、持久 Markdown 记忆/编辑、头像与真实状态动效、Activity、对话/送达确认、权限卡片、派任务/详情、STT、特殊键、PWA，以及独立 VAPID / 订阅存储 / Web Push 发送、具体审批摘要和可信完成/失败通知。用户业务已消费 #19 自持服务端写锁与显式解锁入口；未配置本机解锁凭据时 fail-closed。triage、多语言全量与通知 debounce / coalesce 仍由对应后续票收口；不把这些当作 #15 已完成。真机安装、锁屏通知和双通道并存仍须人工验收。
+**当前是开发中的 v1，不是正式发布。** 已接线 persona 创建与导航、持久 Markdown 记忆/编辑、头像与真实状态动效、Activity、对话/送达确认、权限卡片、派任务/详情、STT、特殊键、PWA、首页 triage，以及独立 VAPID / 订阅存储 / Web Push 发送、具体审批摘要和可信完成/失败通知。本开发工作区还包含六语言界面与逐订阅通知语言设置；最终依赖接入和全量验收尚未收口。用户业务已接入自持服务端写锁与显式解锁入口，未配置本机解锁凭据时 fail-closed；idle-lock 最终接入与通知 debounce / coalesce 仍待对应票收口。真机安装、锁屏通知和双通道并存仍须人工验收。
 
 正式发布门禁：完成 [PRD §9](PRD.md#9-v1-功能清单验收基线) 全部必选能力，并通过对应设备验收。README / LICENSE 就位不等于 v1 已发布。
 
@@ -110,10 +110,6 @@ daemon 启动可能需要片刻，若立即检查失败，先查 launchd / 日�
 
 PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`。当前更新检测仅写 console，并提供调试入口 `window.__homelingApplyUpdate()`，**没有用户可见的更新提示或刷新按钮**。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作、锁屏 push 或 idle-lock 已完成。
 
-## 语言设置
-
-在 `/lite/` 底部「设置 → 语言」选择 English / Deutsch / Español / 한국어 / 日本語 / 简体中文。界面即时更新；选择保存在本浏览器的 Homeling 偏好中，刷新后保留，**不需要环境变量或重启 daemon**。禁用浏览器存储时，本页仍可切换，但刷新后无法保留。语言设置仅影响产品界面；伙伴名、用户草稿、agent 回复/问题、终端输出不自动翻译。缺失翻译先回退英语；所有语言都缺失的 key 原样显示，便于发现遗漏。
-
 ### 6. 独立 Web Push（需人工锁屏验收）
 
 在 daemon 的实际环境中设置 `HOMELING_PUSH_SUBJECT=mailto:you@example.com`（可选 `HOMELING_PUSH_DIR` 指向仓库外的 owner-only 目录），再重启。**安装脚本不会自动把这两个 shell export 写进 plist**，需自行补入 plist 的 `EnvironmentVariables` 并重新加载；重装覆盖 plist 时须保留该配置。首次启动自动生成独立 VAPID key pair，只向客户端公开公钥；勿打印/提交 `vapid.json` 或订阅 auth keys，也勿复用 Collie 私钥。备份时同时保存该目录的全部状态；丢失/替换 VAPID 后原订阅不能视为仍有效，应重新订阅。
@@ -123,6 +119,12 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 人工验收：锁屏后让 **daemon 注册的 persona 主 pane / 持久归属 task** 出现真实审批，正文须含具体操作；点击应进入正确 persona 主聊或 task；重复轮询、daemon 重启不重复同一 occurrence；明确解决后同内容新请求、新的 task occurrence / registry 主 pane replacement 可再通知。任务完成/失败只消费 #13 持久可信 Activity，unknown / 断连不猜结果。上游未提供可验证的同 pane 进程 incarnation：断连期间的同 pane 重启保持保守 unknown，不保证识别成新实例，不使用 session 名或 history UUID 猜测。
 
 发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；resolve/replace 同次持久 commit 保存通知 tag 墓碑；`/lite/` 前台所有路由只读轮询墓碑并实际向 exact 同 origin `/lite/` SW 发送 `HOMELING_RETRACT`，按 tag 尝试本机关闭（离线/旧 worker 仅 best effort），不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
+
+## 语言设置
+
+在 `/lite/` 底部「设置 → 语言」选择 English / Deutsch / Español / 한국어 / 日本語 / 简体中文。界面即时更新；选择保存在本浏览器的 Homeling 偏好中，刷新后保留，**不需要环境变量或重启 daemon**。禁用浏览器存储时，本页仍可切换，但刷新后无法保留。语言设置仅影响产品界面；伙伴名、用户草稿、agent 回复/问题、终端输出不自动翻译。缺失翻译先回退英语；所有语言都缺失的 key 原样显示，便于发现遗漏。本票交付上述六种语言；不包含上游后来增加的 `zh-TW` 完整资源。
+
+已配置独立 push 且此浏览器已有登记订阅时，显式切换语言只同步该订阅的语言元数据：不申请通知权限、不重新订阅、不启用通知、不生成或重发旧通知。锁定或请求结果不明时，本地界面仍切换并保留选择，显示“通知语言未同步”；**解锁不自动重放，须点「同步通知语言」显式重试**。后续新通知的系统前缀按设备语言生成，原伙伴名/问题/任务摘要保持原文；已显示通知不因语言切换重写。
 
 ## Persona 记忆（#12）
 
