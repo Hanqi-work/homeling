@@ -18,6 +18,22 @@ test("native notification templates localize for all six locales without transla
   expect(localizePushPayload(payload, "de").body).toBe(`Benötigt deine Zustimmung: ${question}`);
   expect(localizePushPayload(payload, "ja").body).toBe(`承認が必要です：${question}`);
 });
+test("grouped native notifications translate the persona count and every system prefix without changing raw questions or occurrence", () => {
+  const grouped: PushPayload = { ...payload, bodyTemplate: undefined, title: "2 个伙伴需要你", body: "legacy grouped body", titleTemplate: { key: "push.agentsNeedYou", params: { count: 2 } }, summaryTemplate: { key: "push.agentsSummary", params: { count: 2 }, questions: [{ personaName: "Mira 原名", question }, { personaName: "Mira 原名", question: "Second 原文" }, { personaName: "Bob $&", question: "Third {count}" }] } };
+  expect(localizePushPayload(grouped, "en")).toMatchObject({ title: "2 companions need you", body: `2 companions need you\nMira 原名: Needs your approval: ${question}\nMira 原名: Needs your approval: Second 原文\nBob $&: Needs your approval: Third {count}`, tag: "same-tag", occurrenceKey: "same-occurrence", url: "/lite/persona/mira" });
+  for (const { code } of LOCALES) {
+    const result = localizePushPayload(grouped, code);
+    expect(result.title).toContain("2");
+    expect(result.body).toContain(question);
+    expect(result.body).toContain("Bob $&");
+    expect(result.body).toContain("Third {count}");
+    expect(result.summaryTemplate).toBe(grouped.summaryTemplate);
+  }
+  const single = { ...grouped, titleTemplate: { key: "push.agentsNeedYou" as const, params: { count: 1 } }, summaryTemplate: { ...grouped.summaryTemplate!, params: { count: 1 } } };
+  expect(localizePushPayload(single, "en").title).toBe("1 companion needs you");
+  expect(localizePushPayload(single, "de").title).toBe("1 Begleiter braucht dich");
+  expect(localizePushPayload(grouped, "ja").title).toBe("2 人の仲間があなたを必要としています");
+});
 test("missing or invalid locale defaults to English; legacy payloads without metadata are not guessed from their text", () => {
   expect(localizePushPayload(payload, undefined).body).toBe(`Needs your approval: ${question}`);
   expect(localizePushPayload(payload, "unsupported").body).toBe(`Needs your approval: ${question}`);

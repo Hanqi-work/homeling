@@ -27,11 +27,23 @@ export interface PushState {
   readonly activityCursor: number;
   /** Notification-only tombstones; retained through occurrence replacement and daemon restart. */
   readonly retractTags: readonly string[];
+  /** Optional v1 extension: original occurrence claims, independent of aggregate membership. */
+  readonly coordination?: {
+    readonly handled: Readonly<Record<string, string | null>>;
+    readonly baselines: readonly string[];
+  };
 }
 export const emptyPushState = (): PushState => ({ version: 1, subscriptions: [], preferences: { enabled: true }, deliveries: {}, pendingOccurrences: {}, activityCursor: 0, retractTags: [] });
 export function withRetractTags(state: PushState, tags: readonly string[]): PushState {
-  if (tags.every(tag => state.retractTags.includes(tag))) return state;
-  return { ...state, retractTags: [...new Set([...state.retractTags, ...tags])] };
+  // Source retirement and aggregate cancellation share the very same durable commit.
+  const expanded = [...tags];
+  for (const tag of tags) {
+    if (!tag.startsWith('homeling-request-')) continue;
+    const aggregate = state.coordination?.handled[`request:${tag.slice('homeling-request-'.length)}`];
+    if (aggregate) expanded.push(aggregate);
+  }
+  if (expanded.every(tag => state.retractTags.includes(tag))) return state;
+  return { ...state, retractTags: [...new Set([...state.retractTags, ...expanded])] };
 }
 export interface PushPersistence {
   load(): Promise<PushState>;
@@ -52,6 +64,10 @@ export class PushStore implements PushPersistence {
       if (state.version !== 1 || !Array.isArray(state.subscriptions) || typeof state.preferences?.enabled !== 'boolean' || !state.deliveries || typeof state.deliveries !== 'object' || !state.pendingOccurrences || typeof state.pendingOccurrences !== 'object' || !Number.isSafeInteger(state.activityCursor) || state.activityCursor < 0) throw new Error('invalid push store');
       if (Object.values(state.deliveries).some(time => !Number.isFinite(time)) || Object.values(state.pendingOccurrences).some(item => !item || typeof item.binding !== 'string' || typeof item.identity !== 'string' || typeof item.occurrenceKey !== 'string' || typeof item.active !== 'boolean')) throw new Error('invalid push occurrence state');
       if (state.subscriptions.some(item => !item || typeof item.owner !== 'string' || typeof item.endpoint !== 'string' || typeof item.keys?.p256dh !== 'string' || typeof item.keys.auth !== 'string')) throw new Error('invalid push subscription state');
+      if (state.coordination !== undefined) {
+        const { handled, baselines } = state.coordination ?? {};
+        if (!handled || typeof handled !== 'object' || Array.isArray(handled) || Object.values(handled).some(tag => tag !== null && typeof tag !== 'string') || !Array.isArray(baselines) || baselines.some(binding => typeof binding !== 'string')) throw new Error('invalid push coordination state');
+      }
       const retractTags = state.retractTags ?? [];
       if (!Array.isArray(retractTags) || retractTags.some(tag => typeof tag !== 'string')) throw new Error('invalid push retract state');
       // Read-only compatibility for older v1 files; only a later admitted mutation persists the field.

@@ -8,6 +8,7 @@ export type PendingPushObservation = {
   readonly state: 'pending';
   readonly binding: string;
   readonly personaName: string;
+  readonly personaId?: string;
   readonly identity: string;
   readonly summary: string;
   readonly bodyTemplate?: PushBodyTemplate;
@@ -19,7 +20,14 @@ export type PendingPushObservation = {
   readonly state: 'unknown';
   readonly binding: string;
 };
-export interface PendingPushEvent { readonly state: 'pending' | 'resolved'; readonly tag: string; readonly payload?: PushPayload; readonly supersededTag?: string }
+export interface PendingPushEvent {
+  readonly state: 'pending' | 'resolved';
+  /** Approval incarnation is distinct from the task/resource lifecycle occurrence. */
+  readonly occurrence: { readonly kind: 'approval'; readonly resourceId: string; readonly occurrenceKey: string };
+  readonly tag: string;
+  readonly payload?: PushPayload;
+  readonly supersededTag?: string;
+}
 export class PendingPushLedger {
   constructor(private readonly store: PushPersistence, private readonly admission: SystemAdmission<'push.deliver'>) {
     if (admission.scope !== 'push.deliver') throw new Error('pending push requires delivery capability');
@@ -32,7 +40,7 @@ export class PendingPushLedger {
       for (const [key, item] of Object.entries(pendingOccurrences)) {
         if (item.active && !valid.has(item.binding)) {
           pendingOccurrences[key] = { ...item, active: false };
-          events.push({ state: 'resolved', tag: `homeling-request-${item.occurrenceKey}` });
+          events.push({ state: 'resolved', occurrence: { kind: 'approval', resourceId: item.binding, occurrenceKey: `request:${item.occurrenceKey}` }, tag: `homeling-request-${item.occurrenceKey}` });
         }
       }
       return { next: events.length ? withRetractTags({ ...state, pendingOccurrences }, events.map(event => event.tag)) : state, result: events };
@@ -49,7 +57,7 @@ export class PendingPushLedger {
           ...state,
           pendingOccurrences: { ...state.pendingOccurrences, [key]: { ...current, active: false } },
         }, [`homeling-request-${current.occurrenceKey}`]);
-        const result: PendingPushEvent = { state: 'resolved', tag: `homeling-request-${current.occurrenceKey}` };
+        const result: PendingPushEvent = { state: 'resolved', occurrence: { kind: 'approval', resourceId: observation.binding, occurrenceKey: `request:${current.occurrenceKey}` }, tag: `homeling-request-${current.occurrenceKey}` };
         return { next, result };
       }
       const identity = createHash('sha256').update(observation.identity).digest('hex');
@@ -76,7 +84,7 @@ export class PendingPushLedger {
       const supersededTag = current?.active && !sameOccurrence
         ? `homeling-request-${current.occurrenceKey}` : undefined;
       const result: PendingPushEvent = {
-        state: 'pending', tag, payload,
+        state: 'pending', occurrence: { kind: 'approval', resourceId: observation.binding, occurrenceKey: payload.occurrenceKey }, tag, payload,
         ...(supersededTag ? { supersededTag } : {}),
       };
       return { next, result };

@@ -9,6 +9,12 @@ export interface PushPayload {
   readonly title: string;
   readonly body: string;
   readonly bodyTemplate?: PushBodyTemplate;
+  readonly titleTemplate?: { readonly key: 'push.agentsNeedYou'; readonly params: { readonly count: number } };
+  readonly summaryTemplate?: {
+    readonly key: 'push.agentsSummary';
+    readonly params: { readonly count: number };
+    readonly questions: readonly { readonly personaName: string; readonly question: string }[];
+  };
   readonly tag: string;
   readonly url: string;
   readonly occurrenceKey: string;

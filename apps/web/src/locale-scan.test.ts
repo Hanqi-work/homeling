@@ -49,6 +49,6 @@ test("all literal translation references, copy keys and wire-domain dynamic keys
   for (const key of ["task.working", "task.blocked", "task.idle", "task.done", "task.starting", "persona.thinking", "persona.active", "persona.idle", "persona.blocked", "personaDetail.memory", "personaDetail.activity", "personaDetail.customize"]) references.add(key);
   const missing: string[] = [];
   for (const { code } of LOCALES) for (const key of references) if (!localeResources[code]?.[key]?.trim()) missing.push(`${code}:${key}`);
-  for (const { code } of LOCALES) for (const key of ["push.approval", "push.taskCompleted", "push.taskFailed", "push.test"]) if (!pushLocaleResources[code]?.[key]?.trim()) missing.push(`native:${code}:${key}`);
+  for (const { code } of LOCALES) for (const key of Object.keys(pushLocaleResources.en!)) if (!pushLocaleResources[code]?.[key]?.trim()) missing.push(`native:${code}:${key}`);
   expect(missing).toEqual([]);
 });
