@@ -28,7 +28,12 @@ snap() {
 collie_fingerprint() {
   local bin="$COLLIE_DIR/bin/collie"
   [ -f "$bin" ] || { echo "missing"; return; }
-  echo "$(stat -f %m "$bin" 2>/dev/null || stat -c %Y "$bin") $(shasum -a 256 "$bin" | cut -d' ' -f1)"
+  local modified
+  # GNU stat may emit filesystem details before rejecting BSD flags; discard that failed probe.
+  if ! modified=$(stat -f %m "$bin" 2>/dev/null); then
+    modified=$(stat -c %Y "$bin")
+  fi
+  echo "$modified $(shasum -a 256 "$bin" | cut -d' ' -f1)"
 }
 
 root_handler() {
