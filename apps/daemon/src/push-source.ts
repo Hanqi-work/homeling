@@ -20,12 +20,12 @@ export async function readPendingPushBatch(cfg: DaemonConfig, fetcher: BridgeFet
   // Project trusted ownership once, after the snapshot await; retirement and panes share it.
   const personas = await registry.list();
   const latestTasks = new Map((await ownership()).map(item => [item.paneId, item]));
-  const bindings = new Map<string, { binding: string; personaName: string; spaceId: string; url: string }>();
+  const bindings = new Map<string, { binding: string; personaId: string; personaName: string; spaceId: string; url: string }>();
   const validBindings = new Set<string>();
   for (const persona of personas) {
     const binding = `main:${persona.id}:${persona.spaceId}:${persona.mainPaneId}`;
     validBindings.add(binding);
-    bindings.set(persona.mainPaneId, { binding, personaName: persona.name, spaceId: persona.spaceId, url: `/lite/persona/${encodeURIComponent(persona.id)}` });
+    bindings.set(persona.mainPaneId, { binding, personaId: persona.id, personaName: persona.name, spaceId: persona.spaceId, url: `/lite/persona/${encodeURIComponent(persona.id)}` });
   }
   for (const task of latestTasks.values()) {
     bindings.delete(task.paneId);
@@ -33,13 +33,13 @@ export async function readPendingPushBatch(cfg: DaemonConfig, fetcher: BridgeFet
     if (!persona) continue;
     const binding = `task:${task.occurrenceKey}`;
     validBindings.add(binding);
-    bindings.set(task.paneId, { binding, personaName: persona.name, spaceId: task.spaceId, url: `/lite/p/${encodeURIComponent(task.paneId)}?occurrence=${encodeURIComponent(task.occurrenceKey)}` });
+    bindings.set(task.paneId, { binding, personaId: persona.id, personaName: persona.name, spaceId: task.spaceId, url: `/lite/p/${encodeURIComponent(task.paneId)}?occurrence=${encodeURIComponent(task.occurrenceKey)}` });
   }
   const observations: PendingPushObservation[] = [];
   for (const pane of snapshot.agents) {
     const owner = bindings.get(pane.paneId);
     if (!owner || owner.spaceId !== pane.workspaceId) continue;
-    const { binding, personaName, url } = owner;
+    const { binding, personaId, personaName, url } = owner;
     if (pane.status === 'unknown') { observations.push({ binding, state: 'unknown' }); continue; }
     if (pane.status !== 'blocked') { observations.push({ binding, state: 'resolved' }); continue; }
     try {
@@ -51,7 +51,7 @@ export async function readPendingPushBatch(cfg: DaemonConfig, fetcher: BridgeFet
       const summary = `需要你批准 ${specific.replace(/\s+/g, ' ').trim()}`;
       // Ignore pointer movement / terminal context redraw, but bind concrete operation+options.
       const identity = JSON.stringify({ kind: detected.kind, question: detected.question, subject: detected.subject.join(' '), options: detected.options.map(o => ({ id: o.id, label: o.label })) });
-      observations.push({ state: 'pending', binding, personaName, url, identity, summary, bodyTemplate: { key: 'push.approval', params: { question: specific.replace(/\s+/g, ' ').trim() } } });
+      observations.push({ state: 'pending', binding, personaId, personaName, url, identity, summary, bodyTemplate: { key: 'push.approval', params: { question: specific.replace(/\s+/g, ' ').trim() } } });
     } catch { /* Gap leaves durable pending occurrence untouched; next successful read reconciles. */ }
   }
   return { validBindings, observations };
