@@ -57,7 +57,7 @@ test("home counts distinct registry personas, not requests, spaces, legacy or se
     : String(url).endsWith("/activity") ? Response.json(activity("task /1"))
     : Response.json([request("1", "mira"), { ...request("2", "mira", "task /1"), taskOccurrenceKey: "3f0ec6a3-14db-40e5-a222-cade2e7f8001" }, request("3", "sol", "sol-main"), request("4", "space-not-persona"), request("5", undefined), request("6", "unknown"), request("7", "mira", "main", "resolved"), request("8", "sol", "sol-main", "expired")])) as unknown as typeof fetch;
   await mount();
-  expect(container.textContent).toContain("2 个伙伴需要你");
+  expect(container.textContent).toContain("2 companions need you");
   expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["/persona/mira", "/p/task%20%2F1?occurrence=3f0ec6a3-14db-40e5-a222-cade2e7f8001", "/persona/sol"]);
 });
 
@@ -68,7 +68,7 @@ test("successful polling removes resolved requests and hides the zero summary wi
     return String(url).endsWith("persona/list") ? Response.json({ personas: [mira] }) : Response.json(requests);
   }) as unknown as typeof fetch;
   await mount(false, 10);
-  expect(container.textContent).toContain("1 个伙伴需要你");
+  expect(container.textContent).toContain("1 companion needs you");
   requests = [request("1", "mira", "main", "resolved")];
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
   expect(container.querySelector("section")).toBeNull();
@@ -84,8 +84,8 @@ test("read failure is visible and preserves only an explicitly labelled last con
   await mount(false, 10);
   fail = true;
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("以下为上次确认的请求");
-  expect(container.textContent).toContain("1 个伙伴需要你");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("These are the last confirmed requests");
+  expect(container.textContent).toContain("1 companion needs you");
 });
 
 test.each(["settled-latest", "reused-owner", "not-current", "not-live-available", "request-key-mismatch", "gap", "wrong-persona", "wrong-space", "read-failed"])("unconfirmed task %s retains persona count without exposing an unscoped writable link", async (scenario) => {
@@ -102,8 +102,8 @@ test.each(["settled-latest", "reused-owner", "not-current", "not-live-available"
       : [{ ...current.occurrences[0], personaId: scenario === "wrong-persona" ? "someone-else" : "mira", spaceId: scenario === "wrong-space" ? "legacy-space" : mira.spaceId }] });
   }) as unknown as typeof fetch;
   await mount();
-  expect(container.textContent).toContain("1 个伙伴需要你");
-  expect(container.textContent).toContain("暂不可确认任务归属");
+  expect(container.textContent).toContain("1 companion needs you");
+  expect(container.textContent).toContain("Task ownership cannot be confirmed");
   expect(container.querySelector("a")).toBeNull();
 });
 
@@ -205,7 +205,7 @@ test("unlock waits for a fresh triage read rather than flashing a pre-lock pendi
     return Response.json([request("old", "mira")]);
   }) as unknown as typeof fetch;
   await mount();
-  expect(container.textContent).toContain("1 个伙伴需要你");
+  expect(container.textContent).toContain("1 companion needs you");
   await act(async () => root.render(<MemoryRouter><HomeTriage suspended /></MemoryRouter>));
   delayed = true;
   await act(async () => root.render(<MemoryRouter><HomeTriage /></MemoryRouter>));
@@ -236,13 +236,13 @@ test("production AppRoot really suspends triage on server lock and until read-on
   expect(sessionState.get().locked).toBe(false);
   expect(sessionState.get().ready).toBe(false);
   expect(pendingReads).toBe(1); // SessionBoundary catch-up only; triage is still suspended.
-  expect(container.textContent).not.toContain("1 个伙伴需要你");
+  expect(container.textContent).not.toContain("1 companion needs you");
   await act(async () => finishSnapshot(Response.json({ ts: 1, bridge: "connected", agents: [], shellPanes: [] })));
   expect(sessionState.get().ready).toBe(true);
   expect(pendingReads).toBe(2);
-  expect(container.textContent).toContain("1 个伙伴需要你");
+  expect(container.textContent).toContain("1 companion needs you");
   await act(async () => sessionState.lock());
-  expect(container.textContent).not.toContain("1 个伙伴需要你");
+  expect(container.textContent).not.toContain("1 companion needs you");
   expect(pendingReads).toBe(2);
 });
 

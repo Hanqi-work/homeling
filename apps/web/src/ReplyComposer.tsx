@@ -1,3 +1,4 @@
+import { useLocale } from "./locale.tsx";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { browserVoiceInput, VoiceInput, type VoiceInputDependencies, type VoiceInputState } from "./voice-input.ts";
 
@@ -32,6 +33,7 @@ export function handleComposerKeyDown(
 }
 
 export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, disabledReason, scopeId, voiceDependencies = browserVoiceInput }: ReplyComposerProps): ReactElement {
+  const { t } = useLocale();
   const [voiceState, setVoiceState] = useState<VoiceInputState>({ phase: "idle", message: "" });
   const latest = useRef({ draft, onDraftChange, scopeId, disabled });
   latest.current = { draft, onDraftChange, scopeId, disabled };
@@ -65,20 +67,20 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
 
   return (
     <form onSubmit={handleSubmit} className="border-t border-neutral-800 bg-[#1a1a1a] pt-3">
-      <div className="mb-2 flex gap-2 overflow-x-auto pb-1" aria-label="快捷回复">
-        {QUICK_REPLIES.map((phrase) => (
+      <div className="mb-2 flex gap-2 overflow-x-auto pb-1" aria-label={t("composer.quickReplies")}>
+        {["composer.quickLook", "composer.quickContinue", "composer.quickPause"].map((key) => (
           <button
-            key={phrase}
+            key={key}
             type="button"
             disabled={disabled}
-            onClick={() => selectQuickReply(phrase, changeDraft)}
-            className="shrink-0 rounded-full border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-700 hover:text-green-200"
+            onClick={() => selectQuickReply(t(key), changeDraft)}
+            className="min-h-11 shrink-0 rounded-full border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-green-700 hover:text-green-200"
           >
-            {phrase}
+            {t(key)}
           </button>
         ))}
       </div>
-      <label className="sr-only" htmlFor="reply-draft">回复消息</label>
+      <label className="sr-only" htmlFor="reply-draft">{t("composer.reply")}</label>
       <div className="flex items-end gap-2">
         <textarea
           id="reply-draft"
@@ -92,12 +94,12 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
           }, sendDraft)}
           disabled={disabled}
           rows={2}
-          placeholder="输入消息…"
+          placeholder={t("composer.placeholder")}
           className="min-h-12 min-w-0 flex-1 resize-y rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:border-green-700 focus:outline-none"
         />
         <button
           type="button"
-          aria-label={voiceState.phase === "recording" ? "停止并转写" : "开始语音输入"}
+          aria-label={voiceState.phase === "recording" ? t("voice.stopTranscribe") : t("voice.start")}
           aria-pressed={voiceState.phase === "recording"}
           disabled={disabled || voiceState.phase === "permission" || voiceState.phase === "transcribing"}
           onClick={() => {
@@ -106,20 +108,20 @@ export function ReplyComposer({ draft, onDraftChange, onSend, disabled = false, 
           }}
           className="min-h-12 min-w-12 rounded-xl border border-neutral-700 px-3 py-3 text-sm text-neutral-200 disabled:opacity-50"
         >
-          {voiceState.phase === "recording" ? "停止" : "语音"}
+          {voiceState.phase === "recording" ? t("common.stop") : t("voice.button")}
         </button>
         <button
           type="submit"
           disabled={disabled || !draft.trim()}
           className="rounded-xl bg-green-700 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Send
+          {t("common.send")}
         </button>
       </div>
-      {voiceState.message ? <p className="mt-2 text-xs text-neutral-300" role={voiceState.phase === "error" ? "alert" : "status"}>{voiceState.message}</p> : null}
-      {busy ? <button type="button" onClick={() => voice.cancel()} className="mt-1 min-h-11 px-3 text-sm text-neutral-300">取消语音输入</button> : null}
-      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">{disabledReason ?? "请先重试尚未确认的消息，再发送新消息。"}</p> : null}
-      <p className="mt-1 text-right text-[10px] text-neutral-500">Enter 发送 · Shift+Enter 换行</p>
+      {voiceState.message ? <p className="mt-2 text-xs text-neutral-300" role={voiceState.phase === "error" ? "alert" : "status"}>{voiceState.copy ? t(voiceState.copy.key, voiceState.copy.params) : voiceState.message}</p> : null}
+      {busy ? <button type="button" onClick={() => voice.cancel()} className="mt-1 min-h-11 px-3 text-sm text-neutral-300">{t("voice.cancel")}</button> : null}
+      {disabled ? <p className="mt-1 text-xs text-amber-300" role="status">{disabledReason ?? t("composer.unconfirmed")}</p> : null}
+      <p className="mt-1 text-right text-[10px] text-neutral-500">{t("composer.keys")}</p>
     </form>
   );
 }

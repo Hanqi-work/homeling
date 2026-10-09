@@ -9,6 +9,10 @@
   .persona-thinking-orb { animation: none; transform: none; }
 }
 
+/* Reserve the fixed bottom navigation when keyboard focus scrolls into view. */
+html { scroll-padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
+:focus { scroll-margin-block: 1rem; }
+
 body {
   margin: 0;
   background: #1a1a1a;

@@ -19,7 +19,7 @@ export function createActivityObserver(
   let pendingGap: { reason: string } | undefined = { reason: "Daemon observer restarted; Herdr does not expose event replay" };
   let gapRecorded = false;
   let cancelCandidate: (() => void) | undefined;
-  const report = (error: unknown) => console.error("[homeling-daemon] activity observation unavailable", error);
+  const report = (_error: unknown) => console.error("[homeling-daemon] activity observation unavailable");
   const persistGap = async () => {
     const gap = pendingGap;
     if (!gap) return;
@@ -70,7 +70,7 @@ export function createActivityObserver(
         }, (reason) => {
           candidate?.close();
           if (!closed && (activeGeneration === candidateGeneration || activeGeneration === 0)) {
-            invalidate(reason);
+            invalidate("Herdr event connection interrupted; observation continuity is unknown");
             void enqueue(persistGap);
             retry();
           }

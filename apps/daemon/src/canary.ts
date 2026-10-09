@@ -10,11 +10,11 @@ export function parseServeStatusRootProxy(json: string): string | null {
     const parsed: unknown = JSON.parse(json);
     const web = (parsed as { Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }> }).Web;
     if (!web || typeof web !== "object") return null;
-    for (const listener of Object.values(web)) {
-      const proxy = listener?.Handlers?.["/"]?.Proxy;
-      if (typeof proxy === "string" && proxy.length > 0) return proxy;
-    }
-    return null;
+    const roots = Object.values(web).flatMap(listener => {
+      const handler = listener?.Handlers?.["/"];
+      return handler ? [handler.Proxy] : [];
+    });
+    return roots.length === 1 && typeof roots[0] === "string" && roots[0].length > 0 ? roots[0] : null;
   } catch {
     return null;
   }

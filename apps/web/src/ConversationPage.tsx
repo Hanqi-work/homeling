@@ -1,3 +1,5 @@
+import { useLocale, type Translate } from "./locale.tsx";
+import { LocalizedUIError, type LocalizedCopy } from "./ui-copy.ts";
 import {
   AssistantRuntimeProvider,
   ThreadPrimitive,
@@ -19,7 +21,7 @@ import { SpecialKeyBar } from "./SpecialKeyBar.tsx";
 import { TaskChip } from "./TaskChip.tsx";
 import { PersonaAvatar } from "./PersonaAvatar.tsx";
 import { conversationTaskStorageKey, readConversationTasks, saveConversationTasks } from "./task-store.ts";
-import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
+import { guardUnknownRetry, createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 
 import { useSessionSnapshot } from "./SessionBoundary.tsx";
 import { sessionState } from "./session-state.ts";
@@ -36,13 +38,15 @@ interface PaneConversationProps {
   personaStale?: boolean;
 }
 
-function failureLabel(message: OutgoingMessage): string {
-  if (message.deliveryUnknown) return "Delivery unknown; retry may duplicate";
-  if (message.textDelivered) return "Text entered; submit again?";
-  return "Send failed";
+function failureLabel(t: Translate, message: OutgoingMessage): string {
+  if (message.deliveryUnknown) return t("task.deliveryUnknownRetry");
+  if (message.textDelivered) return t("task.submitAgain");
+  return t("task.sendFailed");
 }
 
 function PaneConversation({ paneId, personaId, persona, draft, setDraft, personaStale = false, occurrenceKey }: PaneConversationProps): ReactElement {
+  const { t } = useLocale();
+  const renderCopy = (copy: LocalizedCopy) => t(copy.key, { ...copy.params, error: copy.params?.error || t("common.unknownError") });
   const lockSession = useSessionSnapshot();
   const taskStorageKey = occurrenceKey === undefined ? conversationTaskStorageKey(paneId, personaId) : `task-occurrence:${occurrenceKey}`;
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
@@ -51,7 +55,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
   const outgoingRef = useRef(history.outgoing);
   outgoingRef.current = history.outgoing;
   const confirmedMessageIds = useRef(new Set<string>());
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalizedCopy | null>(null);
   const [launchers, setLaunchers] = useState<readonly Launcher[]>([]);
   const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
   const [snapshotHealthy, setSnapshotHealthy] = useState(false);
@@ -61,8 +65,8 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
   const [launchOpen, setLaunchOpen] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState("");
   const [launching, setLaunching] = useState(false);
-  const [launchError, setLaunchError] = useState<string | null>(null);
-  const [requestError, setRequestError] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<LocalizedCopy | null>(null);
+  const [requestError, setRequestError] = useState<LocalizedCopy | null>(null);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [settledRequests, setSettledRequests] = useState<PendingRequest[]>([]);
   const requestPollState = useRef<RequestPollState | null>(null);
@@ -112,7 +116,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
   function receiveHistory(response: PaneHistoryResponse, requestId: number, pageKind?: HistoryPageKind): void {
     if (!response.available) {
       dispatch({ type: "unavailable", paneId, requestId });
-      if (requestId >= latestSuccessSequence.current) setError(`history ${response.reason}`);
+      if (requestId >= latestSuccessSequence.current) setError({ key: "conversation.historyReason", params: { reason: response.reason } });
       return;
     }
     const confirmationEntries = mergeTranscripts([historyRef.current.entries, response.entries]);
@@ -140,7 +144,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         receiveHistory(response, requestId);
       } catch (err: unknown) {
         if (!signal.aborted && requestId >= latestSuccessSequence.current) {
-          setError(err instanceof Error ? err.message : "history failed");
+          setError(err instanceof LocalizedUIError ? err.copy : { key: "conversation.historyFailed", params: { error: err instanceof Error ? err.message : "" } });
         }
       }
     }, 2000);
@@ -160,7 +164,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         setSelectedCommand((current) => current || response.launchers[0]?.command || "");
       }
     }).catch((err: unknown) => {
-      if (!controller.signal.aborted) setLaunchError(err instanceof Error ? err.message : "Unable to load launchers");
+      if (!controller.signal.aborted) setLaunchError(err instanceof LocalizedUIError ? err.copy : { key: "conversation.launchersFailed", params: { error: err instanceof Error ? err.message : "" } });
     });
     const session = startAbortableSerialPolling(async (signal) => {
       try {
@@ -209,7 +213,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
       }]);
       setLaunchOpen(false);
     } catch (err: unknown) {
-      setLaunchError(err instanceof Error ? err.message : "Launch failed");
+      setLaunchError(err instanceof LocalizedUIError ? err.copy : { key: "conversation.launchFailed", params: { error: err instanceof Error ? err.message : "" } });
     } finally {
       setLaunching(false);
     }
@@ -239,7 +243,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         setRequestError(null);
       } catch (err: unknown) {
         if (!signal.aborted && requestPollState.current!.isCurrent(pollVersion)) {
-          setRequestError(err instanceof Error ? err.message : "request poll failed");
+          setRequestError(err instanceof LocalizedUIError ? err.copy : { key: "conversation.requestsFailed", params: { error: err instanceof Error ? err.message : "" } });
         }
       }
     }, 2000);
@@ -268,16 +272,45 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
       receiveHistory(response, requestId, "older");
     } catch (err: unknown) {
       if (!controller.signal.aborted && requestId >= latestSuccessSequence.current) {
-        setError(err instanceof Error ? err.message : "history failed");
+        setError(err instanceof LocalizedUIError ? err.copy : { key: "conversation.historyFailed", params: { error: err instanceof Error ? err.message : "" } });
       }
     } finally {
       if (!controller.signal.aborted) setLoadingOlder(false);
     }
   }
 
-  function sendMessage(text: string, existing?: OutgoingMessage): void {
+  const retryLifetime = useRef(new AbortController());
+  useEffect(() => {
+    const lifetime = new AbortController(); retryLifetime.current = lifetime;
+    return () => lifetime.abort();
+  }, []);
+  const retryCheckingIds = useRef(new Set<string>());
+  async function retryGuard(message: OutgoingMessage, confirm: boolean, check: () => void, signal: AbortSignal): Promise<boolean> {
+    return guardUnknownRetry({
+      admit: () => check, signal,
+      refresh: async () => {
+        const response = await fetchPaneHistory(paneId, AbortSignal.any([signal, AbortSignal.timeout(10_000)]), undefined, occurrenceKey);
+        signal.throwIfAborted();
+        check();
+        if (!response.available) throw new Error("History unavailable");
+        receiveHistory(response, ++requestSequence.current);
+      },
+      isConfirmed: () => confirmedMessageIds.current.has(message.id) || historyRef.current.outgoing.some(item => item.id === message.id && !!item.matchedUuid),
+      confirm: confirm ? () => window.confirm(t("task.unknownRetryConfirm")) : undefined,
+    });
+  }
+  async function sendMessage(text: string, existing?: OutgoingMessage): Promise<void> {
     if (controlBlockedRef.current || (sendBlockedRef.current && !existing)) return;
-    if (existing && queuedMessageIds.current.has(existing.id)) return;
+    if (existing && (queuedMessageIds.current.has(existing.id) || retryCheckingIds.current.has(existing.id))) return;
+    const lifetime = retryLifetime.current.signal;
+    let check: () => void;
+    try { check = sessionState.admit(); } catch { return; }
+    if (existing?.deliveryUnknown && !existing.textDelivered) {
+      retryCheckingIds.current.add(existing.id);
+      const allowed = await retryGuard(existing, true, check, lifetime);
+      retryCheckingIds.current.delete(existing.id);
+      if (!allowed || controlBlockedRef.current) return;
+    }
     const outgoing: OutgoingMessage = existing
       ? { ...existing, status: "pending", retryQueued: true }
       : {
@@ -309,6 +342,12 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         return confirmed;
       },
       async () => {
+        if (lifetime.aborted) return;
+        try { check(); } catch { return; }
+        if (existing?.deliveryUnknown && !existing.textDelivered && !await retryGuard(existing, false, check, lifetime)) {
+          if (!confirmedMessageIds.current.has(existing.id)) dispatch({ type: "outgoing-failed", paneId, id: existing.id, textDelivered: null });
+          return;
+        }
         const attemptOrder = ++sendAttemptSequence.current;
         outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
           ? { ...message, attemptOrder, retryQueued: false }
@@ -370,32 +409,32 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
     onNew: async () => {},
   });
   const failedMessages = history.outgoing.filter((message) => message.status === "failed");
-  const launchErrorNotice = launchError ? <p className="mt-2 text-sm text-red-300" role="alert">{launchError}</p> : null;
+  const launchErrorNotice = launchError ? <p className="mt-2 text-sm text-red-300" role="alert">{renderCopy(launchError)}</p> : null;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-4 py-4">
         <header className="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-800 bg-[#1a1a1a]/95 px-4 py-3 backdrop-blur">
-          <Link to="/" className="inline-block min-h-11 py-2 text-sm text-green-300 hover:text-green-200">Back to Homelings</Link>
-          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={`Details for ${persona.name}`}><PersonaAvatar avatar={persona.avatar} size="conversation" persona={persona} stale={personaStale || !snapshotHealthy || snapshot?.agents.find((agent) => agent.paneId === paneId)?.status !== "working"} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">Details</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
+          <Link to="/" className="inline-block min-h-11 py-2 text-sm text-green-300 hover:text-green-200">{t("persona.backHome")}</Link>
+          {persona ? <Link to={`/persona/${encodeURIComponent(persona.id)}/details`} className="flex min-h-16 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300" aria-label={t("persona.detailsFor", { name: persona.name })}><PersonaAvatar avatar={persona.avatar} size="conversation" persona={persona} stale={personaStale || !snapshotHealthy || snapshot?.agents.find((agent) => agent.paneId === paneId)?.status !== "working"} /><h1 className="truncate text-lg font-medium">{persona.name}</h1><span className="ml-auto text-sm text-neutral-400">{t("conversation.details")}</span></Link> : <h1 className="mt-1 truncate text-base font-medium">{paneId}</h1>}
           <p className="text-xs text-neutral-400" role="status">
-            {error ?? (history.available === false ? "history unavailable" : "history polling · 2s")}
+            {error ? renderCopy(error) : history.available === false ? t("conversation.historyUnavailable") : t("conversation.polling")}
           </p>
           <button
             type="button"
             onClick={() => { setLaunchOpen((open) => !open); setLaunchError(null); }}
             disabled={occurrenceKey !== undefined || launchers.length === 0}
-            title={occurrenceKey === undefined ? undefined : '从 persona 主对话派新任务'}
+            title={occurrenceKey === undefined ? undefined : t("conversation.launchFromMain")}
             className="mt-3 min-h-11 rounded-xl border border-green-800 px-4 py-2 text-sm text-green-200 disabled:opacity-50"
           >
-            派任务
+            {t("conversation.launch")}
           </button>
           {launchOpen ? (
             <form
               className="mt-3 rounded-xl border border-neutral-700 bg-neutral-900 p-3"
               onSubmit={(event) => { event.preventDefault(); void launchSelectedTask(); }}
             >
-              <label htmlFor="task-launcher" className="mb-2 block text-sm text-neutral-200">选择启动任务</label>
+              <label htmlFor="task-launcher" className="mb-2 block text-sm text-neutral-200">{t("conversation.chooseLauncher")}</label>
               <select
                 id="task-launcher"
                 value={selectedCommand}
@@ -409,20 +448,20 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
               </select>
               {launchErrorNotice}
               <div className="mt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => setLaunchOpen(false)} disabled={launching} className="min-h-11 rounded-lg px-4 text-sm text-neutral-300">取消</button>
+                <button type="button" onClick={() => setLaunchOpen(false)} disabled={launching} className="min-h-11 rounded-lg px-4 text-sm text-neutral-300">{t("common.cancel")}</button>
                 <button type="submit" disabled={!selectedCommand || launching} className="min-h-11 rounded-lg bg-green-800 px-4 text-sm text-white disabled:opacity-50">
-                  {launching ? "正在启动…" : "确认派出"}
+                  {launching ? t("conversation.launching") : t("conversation.confirmLaunch")}
                 </button>
               </div>
             </form>
           ) : launchErrorNotice}
-          {requestError ? <p role="status" className="mt-1 text-xs text-amber-300">权限请求暂不可用：{requestError}</p> : null}
+          {requestError ? <p role="status" className="mt-1 text-xs text-amber-300">{renderCopy(requestError)}</p> : null}
         </header>
         <ThreadPrimitive.Root className="flex flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex flex-col gap-3 pb-8">
             {history.fileTruncated ? (
               <p className="rounded-xl border border-amber-800/70 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-                Bridge history was truncated; only the retained log tail is available.
+                {t("conversation.truncated")}
               </p>
             ) : null}
             {history.hasMore ? (
@@ -432,11 +471,11 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
                 disabled={loadingOlder}
                 className="mx-auto rounded-full border border-neutral-700 px-4 py-2 text-xs text-neutral-300 disabled:opacity-50"
               >
-                {loadingOlder ? "Loading older messages…" : "Load older messages"}
+                {loadingOlder ? t("task.loadingOlder") : t("task.loadOlder")}
               </button>
             ) : null}
             {pendingRequests.length + settledRequests.length > 0 ? (
-              <section aria-label="待处理请求" className="flex flex-col gap-3">
+              <section aria-label={t("triage.label")} className="flex flex-col gap-3">
                 {[...pendingRequests, ...settledRequests].map((request) => (
                   <PendingRequestCard
                     key={request.id}
@@ -449,29 +488,29 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
             ) : null}
             <ThreadPrimitive.Empty>
               <p className="py-8 text-center text-sm text-neutral-500">
-                {error ? "Unable to load conversation. Last known messages are preserved when available." : "No transcript messages yet."}
+                {error ? t("conversation.loadFailedRetained") : t("task.empty")}
               </p>
             </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages components={{ Message: ConversationMessage }} />
             {visibleTasks.length > 0 ? (
-              <ul aria-label="任务" className="mt-2 flex flex-col gap-2">
+              <ul aria-label={t("conversation.tasks")} className="mt-2 flex flex-col gap-2">
                 {visibleTasks.map((task) => <TaskChip key={task.paneId} task={task} returnTo={personaId ? `/persona/${encodeURIComponent(personaId)}` : `/p/${encodeURIComponent(paneId)}`} />)}
               </ul>
             ) : null}
           </ThreadPrimitive.Viewport>
           {failedMessages.length > 0 ? (
-            <section aria-label="发送失败的消息" className="max-h-28 overflow-y-auto border-t border-neutral-800 py-2">
+            <section aria-label={t("task.failedMessages")} className="max-h-28 overflow-y-auto border-t border-neutral-800 py-2">
               {failedMessages.map((message) => (
                 <div key={message.id} className="flex items-center justify-between gap-3 py-1 text-xs text-red-300">
                   <span className="truncate">
-                    {failureLabel(message)}: {message.text}
+                    {failureLabel(t, message)}: {message.text}
                   </span>
                   <button
                     type="button"
                     onClick={() => sendMessage(message.text, message)}
                     className="shrink-0 rounded-lg border border-red-800 px-3 py-1.5 text-red-200"
                   >
-                    Retry
+                    {t("common.retry")}
                   </button>
                 </div>
               ))}
@@ -484,7 +523,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
             disabled={!lockSession.ready || sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
             onBlockedChange={(blocked) => { controlBlockedRef.current = blocked; setControlBlocked(blocked); }}
           />
-          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={!lockSession.ready || sendBlocked || controlBlocked} disabledReason={controlBlocked ? "取消键在途或结果未知；请检查终端，不要刷新后重试。" : undefined} />
+          <ReplyComposer scopeId={paneId} draft={draft} onDraftChange={setDraft} onSend={submitDraft} disabled={!lockSession.ready || sendBlocked || controlBlocked} disabledReason={controlBlocked ? t("conversation.controlUncertain") : undefined} />
         </ThreadPrimitive.Root>
       </main>
     </AssistantRuntimeProvider>
@@ -504,6 +543,7 @@ async function fetchPersonaStatus(signal: AbortSignal) {
 }
 
 export function ConversationPage(): ReactElement {
+  const { t } = useLocale();
   const { paneId: routePaneId, personaId } = useParams();
   const routePaneIdValue = routePaneId ?? "";
   const lockSession = useSessionSnapshot();
@@ -514,7 +554,7 @@ export function ConversationPage(): ReactElement {
   const draft = drafts[draftKey] ?? "";
   const setDraft = (value: string) => setDrafts((current) => ({ ...current, [draftKey]: value }));
   const [persona, setPersona] = useState<PersonaView | null>(null);
-  const [personaLookupError, setPersonaLookupError] = useState<string | null>(null);
+  const [personaLookupError, setPersonaLookupError] = useState<LocalizedCopy | null>(null);
 
   useEffect(() => {
     if (!personaId) {
@@ -529,10 +569,10 @@ export function ConversationPage(): ReactElement {
         if (signal.aborted) return;
         const current = result.personas.find((item) => item.id === personaId);
         setPersona(current ?? null);
-        setPersonaLookupError(current ? null : "Persona not found");
+        setPersonaLookupError(current ? null : { key: "conversation.personaNotFound" });
       } catch (error: unknown) {
         if (!signal.aborted) {
-          setPersonaLookupError(error instanceof Error ? error.message : "Unable to resolve persona");
+          setPersonaLookupError(error instanceof LocalizedUIError ? error.copy : { key: "conversation.personaResolveFailed", params: { error: error instanceof Error ? error.message : "" } });
         }
       }
     }, 3000);
@@ -542,19 +582,19 @@ export function ConversationPage(): ReactElement {
   if (personaId) {
     if (!persona || persona.id !== personaId) {
       return <main className="p-6 text-sm text-neutral-400" role={personaLookupError ? "alert" : "status"}>
-        {personaLookupError ?? "Restoring persona conversation…"}
+        {personaLookupError ? t(personaLookupError.key, personaLookupError.params) : t("conversation.restoring")}
       </main>;
     }
     if (routePaneIdValue) {
       return <Navigate to={`/persona/${encodeURIComponent(personaId)}`} replace />;
     }
     return <>
-      {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{personaLookupError}</p> : null}
+      {personaLookupError ? <p role="status" className="mx-auto max-w-lg px-4 pt-3 text-sm text-amber-300">{t(personaLookupError.key, personaLookupError.params)}</p> : null}
       <PaneConversation key={persona.mainPaneId} paneId={persona.mainPaneId} personaId={persona.id} persona={persona} draft={draft} setDraft={setDraft} personaStale={personaLookupError !== null} />
     </>;
   }
 
-  if (!routePaneIdValue) return <main className="p-6 text-sm">pane id missing</main>;
+  if (!routePaneIdValue) return <main className="p-6 text-sm">{t("task.paneIdMissing")}</main>;
   if (occurrenceKey !== null) {
     return <ActivityTaskBoundary paneId={routePaneIdValue} occurrenceKey={occurrenceKey} returnTo="/">
       {() => <PaneConversation key={`${routePaneIdValue}:${occurrenceKey}`} paneId={routePaneIdValue} occurrenceKey={occurrenceKey} draft={draft} setDraft={setDraft} />}

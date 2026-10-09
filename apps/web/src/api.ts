@@ -1,3 +1,4 @@
+import { LocalizedUIError } from "./ui-copy.ts";
 import type { ActivityResponse, ActivityTaskResponse, CreateResponse, Launcher, LaunchersResponse, PaneHistoryResponse, PendingRequest, PersonaAvatar, PersonaRecord, PersonaListResponse, PersonaView, SnapshotResponse } from "@homeling/contracts";
 
 import { sessionState } from "./session-state.ts";
@@ -28,7 +29,7 @@ export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promis
   });
   let result: { ok?: boolean; text?: unknown; code?: string } = {};
   try { result = await response.json() as typeof result; } catch {
-    throw new Error(`转写失败（${response.status}），请重试。`);
+    throw new LocalizedUIError(`转写失败（${response.status}），请重试。`, { key: "voice.httpFailed", params: { status: response.status } });
   }
   if (!response.ok || result.ok !== true || typeof result.text !== "string") {
     const message = result.code === "stt.unconfigured" || response.status === 503
@@ -38,29 +39,31 @@ export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promis
       : response.status === 415 ? "录音格式不受支持，请换浏览器重试。"
       : response.status === 504 ? "转写超时，请重试。"
       : `转写失败（${response.status}），请重试。`;
-    throw new Error(message);
+    const key = result.code === "stt.unconfigured" || response.status === 503 ? "voice.unconfigured" : response.status === 429 ? "voice.serviceBusy" : response.status === 413 ? "voice.recordingTooLarge" : response.status === 415 ? "voice.unsupportedFormat" : response.status === 504 ? "voice.timeout" : "voice.httpFailed";
+    throw new LocalizedUIError(message, { key, params: { status: response.status } });
   }
   return result.text;
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal, errorLabel?: string): Promise<T> {
+async function getJson<T>(path: string, signal?: AbortSignal, errorLabel?: string, errorKey?: string): Promise<T> {
   const res = await fetch(`${API_PREFIX}${path}`, {
     signal,
     headers: { accept: "application/json" },
   });
   if (!res.ok) {
     const message = errorLabel === undefined ? `${path} ${res.status}` : `${errorLabel} (${res.status})`;
+    if (errorKey) throw new LocalizedUIError(message, { key: errorKey, params: { status: res.status } });
     throw new Error(message);
   }
   return (await res.json()) as T;
 }
 
 export function fetchActivity(personaId: string, signal?: AbortSignal): Promise<ActivityResponse> {
-  return getJson(`persona/${encodeURIComponent(personaId)}/activity`, signal, "Activity unavailable");
+  return getJson(`persona/${encodeURIComponent(personaId)}/activity`, signal, "Activity unavailable", "activity.fetchFailed");
 }
 
 export function fetchTaskOccurrence(occurrenceKey: string, signal?: AbortSignal): Promise<ActivityTaskResponse> {
-  return getJson(`activity/task/${encodeURIComponent(occurrenceKey)}`, signal, "Recorded task unavailable");
+  return getJson(`activity/task/${encodeURIComponent(occurrenceKey)}`, signal, "Recorded task unavailable", "activity.recordedFetchFailed");
 }
 
 /** Same-origin daemon reverse proxy; the browser never connects to Collie's :8787. */

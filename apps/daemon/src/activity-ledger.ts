@@ -112,7 +112,7 @@ export class ActivityLedger {
       } finally { await rm(temporary, { force: true }); }
       for (const event of state.events.slice(previous)) for (const listener of this.listeners) {
         try { listener(structuredClone(event)); }
-        catch (error) { console.error("[homeling-daemon] activity subscriber failed", error); }
+        catch { console.error("[homeling-daemon] activity subscriber failed"); }
       }
       return structuredClone(value);
     });

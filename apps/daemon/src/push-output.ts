@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { PushPayload } from '@homeling/contracts';
+import { localizePushPayload, type PushPayload } from '@homeling/contracts';
 import { withRetractTags, type PushPersistence, type StoredPushSubscription } from './push-store.ts';
 import type { SystemAdmission } from './system-admission.ts';
 import { SessionLocked, type MutationAdmission } from './session-lock.ts';
@@ -34,16 +34,18 @@ export function createPushOutput(options: {
           const key = createHash('sha256').update(payload.occurrenceKey).update('\0').update(subscription.endpoint).digest('hex');
           if (state.deliveries[key] !== undefined) { report.suppressed++; continue; }
           const claimed = await options.store.mutate(current => {
-            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || current.deliveries[key] !== undefined || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: false };
+            const latest = current.subscriptions.find(s => s.endpoint === subscription.endpoint && s.owner === subscription.owner);
+            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || current.deliveries[key] !== undefined || !latest) return { next: current, result: false };
             return { next: { ...current, deliveries: { ...current.deliveries, [key]: options.clock.now() } }, result: true };
           }, options.admission);
           if (!claimed || cancelled.has(payload.tag)) { report.suppressed++; continue; }
           // Claim is already durable. Register dispatch synchronously against current cancellation
           // state in the same store queue as resolution, but don't hold that queue over network I/O.
           const dispatched = await options.store.mutate(current => {
-            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || !current.subscriptions.some(s => s.endpoint === subscription.endpoint)) return { next: current, result: null };
+            const latest = current.subscriptions.find(s => s.endpoint === subscription.endpoint && s.owner === subscription.owner);
+            if (!current.preferences.enabled || current.retractTags.includes(payload.tag) || cancelled.has(payload.tag) || !latest) return { next: current, result: null };
             let delivery: Promise<PushSendResult>;
-            try { delivery = options.admission.dispatch(() => options.transport.send(subscription, payload)); }
+            try { delivery = options.admission.dispatch(() => options.transport.send(latest, localizePushPayload(payload, latest.locale))); }
             catch { delivery = Promise.resolve({ status: 'failed' }); }
             return { next: current, result: { delivery: delivery.catch((): PushSendResult => ({ status: 'failed' })) } };
           }, options.admission);
@@ -73,5 +75,5 @@ export async function sendPushTest(store: PushPersistence, transport: PushTransp
   admission.assert();
   const subscription = (await store.load()).subscriptions.find(s => s.endpoint === endpoint && s.owner === owner);
   if (!subscription) throw new Error('subscription not found');
-  return admission.dispatch(() => transport.send(subscription, { version: 1, type: 'notification', title: 'Homeling', body: '通知已连接。真实审批会在这里显示具体问题。', bodyTemplate: { key: 'push.test', params: {} }, tag: 'homeling-test', url: '/lite/settings', occurrenceKey: 'test' }));
+  return admission.dispatch(() => transport.send(subscription, localizePushPayload({ version: 1, type: 'notification', title: 'Homeling', body: '通知已连接。真实审批会在这里显示具体问题。', bodyTemplate: { key: 'push.test', params: {} }, tag: 'homeling-test', url: '/lite/settings', occurrenceKey: 'test' }, subscription.locale)));
 }

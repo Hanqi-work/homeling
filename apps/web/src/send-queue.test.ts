@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
+import { guardUnknownRetry, createDeferredSendQueue, enqueueUnlessConfirmed } from "./send-queue.ts";
 import { sessionState, SessionStateStore } from "./session-state.ts";
 import { historyReducer, initialHistoryState } from "./history-reducer.ts";
 import type { TranscriptEntry } from "@homeling/contracts";
@@ -8,6 +8,23 @@ async function flushQueue(): Promise<void> {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
+test("unknown retry refreshes before risk confirmation and fails closed on cancellation, read failure or stale session", async () => {
+  const session = new SessionStateStore(); session.apply({ locked: false, epoch: 1, generation: "boot" }); session.caughtUp();
+  const order: string[] = [];
+  const options = { admit: session.admit, refresh: async () => { order.push("read"); }, isConfirmed: () => false, confirm: () => { order.push("confirm"); return false; } };
+  expect(await guardUnknownRetry(options)).toBe(false);
+  expect(order).toEqual(["read", "confirm"]);
+  expect(await guardUnknownRetry({ ...options, refresh: async () => { throw new Error("offline"); }, confirm: () => { throw new Error("must not confirm"); } })).toBe(false);
+  expect(await guardUnknownRetry({ ...options, refresh: async () => { session.lock(); }, confirm: () => true })).toBe(false);
+});
+test("unknown retry never repeats a newly confirmed message and rechecks when dequeued", async () => {
+  let confirmed = false, writes = 0, reads = 0, confirmations = 0;
+  const options = { admit: () => () => {}, refresh: async () => { if (++reads === 2) confirmed = true; }, isConfirmed: () => confirmed, confirm: () => { confirmations++; return true; } };
+  expect(await guardUnknownRetry(options)).toBe(true);
+  const queue = createDeferredSendQueue(options.admit);
+  await queue.enqueue("retry", async () => { if (await guardUnknownRetry({ ...options, confirm: undefined })) writes++; });
+  expect(writes).toBe(0); expect(reads).toBe(2); expect(confirmations).toBe(1);
+});
 describe("createDeferredSendQueue", () => {
   test("the default queue never treats an unknown session as permission to send", async () => {
     sessionState.lock(); let writes = 0; const suspended: string[] = [];

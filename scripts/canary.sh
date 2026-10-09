@@ -34,22 +34,18 @@ collie_fingerprint() {
 root_handler() {
   # The `/` handler of the sole serve listener; empty output means it is gone or unreadable.
   tailscale serve status --json 2>/dev/null | bun -e '
-    const raw = await new Response(Bun.stdin.stream()).text();
-    try {
-      const j = JSON.parse(raw);
-      for (const web of Object.values(j.Web ?? {})) {
-        const h = web.Handlers?.["/"];
-        if (h?.Proxy) { console.log(h.Proxy); process.exit(0); }
-      }
-    } catch {}
-    process.exit(1);
-  '
+    const { parseServeStatusRootProxy } = await import(process.argv[1]);
+    const root = parseServeStatusRootProxy(await new Response(Bun.stdin.stream()).text());
+    if (!root) process.exit(1);
+    console.log(root);
+  ' "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../apps/daemon/src" && pwd)/canary.ts"
 }
 
 cmd_save() {
   [ -d "$COLLIE_DIR" ] || fail "collie dir not found: $COLLIE_DIR"
   local root; root=$(root_handler)
-  [ -n "$root" ] || fail "cannot read tailscale serve root handler — is tailscale running?"
+  [ -n "$root" ] || fail "cannot read an unambiguous tailscale serve root handler"
+  [ "$root" = "$SERVE_ROOT_PROXY" ] || fail "root handler does not match the protected proxy"
   cat > "$STATE_FILE" <<EOF
 COLLIE_HEAD='$(snap)'
 COLLIE_BIN='$(collie_fingerprint)'
@@ -68,7 +64,7 @@ cmd_check() {
 
   local rc=0
 
-  local dirty; dirty=$(git -C "$COLLIE_DIR" status --porcelain 2>/dev/null)
+  local dirty; dirty=$(git -C "$COLLIE_DIR" status --porcelain 2>/dev/null) || fail "cannot read collie checkout status"
   if [ -n "$dirty" ]; then
     echo "[canary] FAIL: collie checkout is dirty:"
     echo "$dirty" | sed 's/^/[canary]   /'

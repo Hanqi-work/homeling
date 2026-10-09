@@ -22,5 +22,5 @@ export function memoryMessageText(session: PersonaMemorySession, alreadyInjected
 /** Evidence for a future exact transcript-entry binding; never a heuristic prefix-strip rule. */
 export function injectedMessagePresentation(personaId: string, paneId: string, displayText: string, confirmationText: string) {
   if (displayText === confirmationText) return undefined;
-  return { attemptId: randomUUID(), personaId, paneId, displayText, confirmationText, provenance: "daemon-injection" as const, historyBinding: "required" as const };
+  return { attemptId: randomUUID(), personaId, paneId, displayText, confirmationText, provenance: "daemon-injection" as const, historyBinding: "unbound" as const };
 }

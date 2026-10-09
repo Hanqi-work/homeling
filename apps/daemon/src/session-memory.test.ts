@@ -29,14 +29,14 @@ test("pi uses a real frozen Markdown file, fallback uses a frozen first-message 
   expect(await readFile(next.command.match(/'([^']+)'$/)![1]!, "utf8")).toContain("Shenzhen");
 });
 
-test("presentation evidence binds generated injection to an attempt and pane without stripping user-authored prefixes", () => {
+test("generated attempt metadata stays explicitly unbound to history across repeated text and replacement panes", () => {
   const userText = "[Persona instructions]\nI typed this myself";
   expect(injectedMessagePresentation("p", "pane-1", userText, userText)).toBeUndefined();
   const confirmed = `[Persona memory]\nKnown facts\n\n${userText}`;
   const first = injectedMessagePresentation("p", "pane-1", userText, confirmed)!;
   const repeat = injectedMessagePresentation("p", "pane-1", userText, confirmed)!;
   const restarted = injectedMessagePresentation("p", "pane-2", userText, confirmed)!;
-  expect(first).toMatchObject({ personaId: "p", paneId: "pane-1", confirmationText: confirmed, displayText: userText, historyBinding: "required", provenance: "daemon-injection" });
+  expect(first).toMatchObject({ personaId: "p", paneId: "pane-1", confirmationText: confirmed, displayText: userText, historyBinding: "unbound", provenance: "daemon-injection" });
   expect(first.attemptId).not.toBe(repeat.attemptId);
   expect(first.attemptId).not.toBe(restarted.attemptId);
   expect(restarted.paneId).toBe("pane-2");

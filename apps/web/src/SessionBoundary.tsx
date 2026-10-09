@@ -1,3 +1,5 @@
+import { useLocale, LanguageSettings } from "./locale.tsx";
+import { LocalizedUIError, type LocalizedCopy } from "./ui-copy.ts";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { fetchPaneHistory, fetchPendingRequests, fetchPersonas, fetchSnapshot } from "./api.ts";
 import { sessionState, type SessionSnapshot } from "./session-state.ts";
@@ -14,7 +16,10 @@ async function sessionRequest(action?: string, secret?: string): Promise<Session
     ...(action ? { body: JSON.stringify(secret ? { secret } : {}) } : {}),
   });
   const result = await response.json() as SessionSnapshot & { error?: string; code?: string };
-  if (!response.ok) throw new Error(result.error ?? result.code ?? `Session ${response.status}`);
+  if (!response.ok) {
+    const key = result.code === "session.invalid_secret" || response.status === 401 ? "session.invalidPassword" : response.status === 429 ? "session.rateLimited" : response.status === 503 ? "session.unavailable" : "session.httpFailed";
+    throw new LocalizedUIError(result.error ?? result.code ?? `Session ${response.status}`, { key, params: { status: response.status } });
+  }
   return result;
 }
 async function readCatchUp(): Promise<void> {
@@ -28,13 +33,18 @@ async function readCatchUp(): Promise<void> {
   if (paneId) await fetchPaneHistory(paneId);
 }
 export function SessionLockButton() {
+  const { t } = useLocale();
   return <button type="button" className="min-h-11 rounded-xl border border-neutral-600 px-4 py-2 text-sm" onClick={() => {
     sessionState.lock();
-    void sessionRequest("lock").catch(() => {});
-  }}>Lock Homeling</button>;
+    const fence = sessionState.version();
+    void sessionRequest("lock").then((next) => {
+      if (fence === sessionState.version() && next.locked) sessionState.apply(next);
+    }).catch(() => { /* The dialog explicitly reports an unconfirmed server lock. */ });
+  }}>{t("session.lock")}</button>;
 }
 /** The same children/router/key stay mounted; the dialog, never a redirect, owns locked focus. */
 export function SessionBoundary({ children }: { children: ReactNode }) {
+  const { t } = useLocale();
   const session = useSessionSnapshot();
   const blocked = session.locked || !session.ready;
   const dialog = useRef<HTMLDialogElement>(null);
@@ -43,7 +53,7 @@ export function SessionBoundary({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   busyRef.current = busy;
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalizedCopy | null>(null);
   async function refresh(action?: string, secret?: string): Promise<void> {
     const request = ++sequence.current;
     const fence = sessionState.version();
@@ -62,7 +72,7 @@ export function SessionBoundary({ children }: { children: ReactNode }) {
     } catch (failure) {
       if (request !== sequence.current) return;
       sessionState.lock();
-      setError(failure instanceof Error ? failure.message : "Session unavailable");
+      setError(failure instanceof LocalizedUIError ? failure.copy : failure instanceof Error ? { key: "session.error", params: { error: failure.message } } : { key: "session.unavailable" });
     }
   }
   useEffect(() => {
@@ -108,17 +118,19 @@ export function SessionBoundary({ children }: { children: ReactNode }) {
   return <>
     <div inert={blocked}>{children}</div>
     <dialog ref={dialog} aria-labelledby="homeling-lock-title" onCancel={(event) => event.preventDefault()} className="m-auto w-[min(92vw,28rem)] rounded-3xl border border-neutral-700 bg-neutral-950 p-6 text-neutral-100 shadow-2xl backdrop:bg-neutral-950/95">
-      <h1 id="homeling-lock-title" className="text-xl font-semibold">Homeling is locked</h1>
-      <p className="mt-2 text-sm leading-6 text-neutral-400">Your place and drafts are kept. Unlock to make changes. Already-running agents continue.</p>
+      <h1 id="homeling-lock-title" className="text-xl font-semibold">{t(session.lockConfirmed ? "session.locked" : "session.localOnly")}</h1>
+      {!session.lockConfirmed ? <p role="alert" className="mt-2 text-sm leading-6 text-amber-300">{t("session.lockUnconfirmed")}</p> : null}
+      <p className="mt-2 text-sm leading-6 text-neutral-400">{t("session.draftsRetained")}</p>
       <form onSubmit={(event) => void unlock(event)} className="mt-5 flex flex-col gap-3">
-        <label htmlFor="homeling-unlock-secret" className="text-sm">Local unlock password</label>
+        <label htmlFor="homeling-unlock-secret" className="text-sm">{t("session.password")}</label>
         <input ref={password} id="homeling-unlock-secret" type="password" autoComplete="off" required minLength={43} maxLength={43} spellCheck={false} className="min-h-11 rounded-xl border border-neutral-600 bg-neutral-900 px-3" aria-describedby="homeling-unlock-help" />
-        <p id="homeling-unlock-help" className="text-xs leading-5 text-neutral-400">Read unlock-secret in your local Homeling data directory. No password is stored in this browser.</p>
-        {error ? <p role="alert" className="text-sm text-amber-300">{error}</p> : null}
-        {session.available === false ? <p role="status" className="text-sm text-amber-300">Initialize owner-only Homeling unlock credentials locally first.</p> : null}
-        <button disabled={busy || session.available === false} className="min-h-11 rounded-xl bg-green-800 px-4 text-sm font-medium disabled:opacity-50">{busy ? "Checking current state…" : "Unlock"}</button>
-        <button type="button" disabled={busy} className="min-h-11 rounded-xl border border-neutral-700 px-4 text-sm" onClick={() => void refresh()}>Check session again</button>
+        <p id="homeling-unlock-help" className="text-xs leading-5 text-neutral-400">{t("session.localSecretHint")}</p>
+        {error ? <p role="alert" className="text-sm text-amber-300">{t(error.key, error.params)}</p> : null}
+        {session.available === false ? <p role="status" className="text-sm text-amber-300">{t("session.initialize")}</p> : null}
+        <button disabled={busy || session.available === false} className="min-h-11 rounded-xl bg-green-800 px-4 text-sm font-medium disabled:opacity-50">{busy ? t("session.checking") : t("session.unlock")}</button>
+        <button type="button" disabled={busy} className="min-h-11 rounded-xl border border-neutral-700 px-4 text-sm" onClick={() => void refresh()}>{t("session.checkAgain")}</button>
       </form>
+      <LanguageSettings id="homeling-locked-language" />
     </dialog>
   </>;
 }

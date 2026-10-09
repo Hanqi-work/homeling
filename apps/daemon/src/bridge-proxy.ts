@@ -8,6 +8,7 @@
  * proxy hop is loopback-to-loopback.
  */
 import { SessionLocked } from "./session-lock.ts";
+import { safeUpstreamFailure } from "./safe-error.ts";
 import type { DaemonConfig } from "./config.ts";
 
 /** Browser-facing prefix (full path, as the daemon receives it from tailscale serve). */
@@ -200,6 +201,10 @@ export async function proxyBridgeRequest(
       else body = await req.arrayBuffer();
     }
     const upstream = await fetcher(target, { method: req.method, headers, body, redirect: "manual", signal });
+    if (!upstream.ok) {
+      const outcome = await upstream.json().catch(() => null);
+      return Response.json(safeUpstreamFailure(outcome, "Bridge request failed", "bridge.unavailable", req.method === "POST" && !isSttRoute), { status: upstream.status });
+    }
     const responseHeaders = new Headers();
     for (const name of ["content-type", "cache-control", "etag"]) {
       const value = upstream.headers.get(name);

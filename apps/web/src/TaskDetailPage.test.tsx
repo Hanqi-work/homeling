@@ -28,7 +28,7 @@ describe("TaskDetailPage", () => {
     expect(html).toContain("Working for");
     expect(html).toContain("View raw pane output");
     expect(html).toContain("Stop task");
-    expect(html).toContain("输入消息");
+    expect(html).toContain("Type a message");
     expect(html).not.toContain("Confirm interrupt");
     expect(html).toContain('href="/p/w1%3Ap1"');
   });
@@ -58,7 +58,7 @@ describe("TaskDetailPage", () => {
     }).catch((error: unknown) => { queue.block("A"); throw error; })).rejects.toThrow("submit failed after text entered");
 
     const locked = renderToStaticMarkup(<ReplyComposer draft="B" onDraftChange={() => {}} onSend={() => {}} disabled={queue.isBlocked()} />);
-    expect(locked).toContain("请先重试尚未确认的消息");
+    expect(locked).toContain("Retry the unconfirmed message");
     expect(locked).toMatch(/<textarea[^>]*disabled=""/);
 
     await enqueueTaskSend(queue, "B", () => false, async () => {

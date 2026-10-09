@@ -1,3 +1,5 @@
+import { useLocale } from "./locale.tsx";
+import type { LocalizedCopy } from "./ui-copy.ts";
 import type { PersonaAvatar as Avatar, PersonaRecord } from "@homeling/contracts";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { fetchPersonas, PersonaAppearanceError, updatePersonaAppearance, type PersonaAppearancePatch } from "./api.ts";
@@ -6,8 +8,8 @@ import { useSessionSnapshot } from "./SessionBoundary.tsx";
 
 const control = "min-h-12 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-base focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-300 disabled:opacity-50";
 const palette = ["#86efac", "#fda4af", "#93c5fd", "#c4b5fd", "#fcd34d"];
-const characters = [["smile", "Smile"], ["curious", "Curious"], ["sleepy", "Sleepy"]] as const;
-const pets = [["none", "No pet"], ["cat", "Cat"], ["dog", "Dog"]] as const;
+const characters = [["smile", "avatar.smile"], ["curious", "avatar.curious"], ["sleepy", "avatar.sleepy"]] as const;
+const pets = [["none", "avatar.none"], ["cat", "avatar.cat"], ["dog", "avatar.dog"]] as const;
 interface SaveAttempt { readonly state: "pending" | "unknown"; readonly patch: PersonaAppearancePatch }
 // Navigation cannot detach pending/unknown writes from their persona.
 const saveAttempts = new Map<string, SaveAttempt>();
@@ -27,6 +29,7 @@ export function PersonaCustomize({ personaId }: { personaId: string }) {
 }
 
 function CustomizeForm({ personaId }: { personaId: string }) {
+  const { t } = useLocale();
   const session = useSessionSnapshot();
   const [persona, setPersona] = useState<PersonaRecord | null>(null);
   const [name, setName] = useState("");
@@ -35,7 +38,7 @@ function CustomizeForm({ personaId }: { personaId: string }) {
   const [attempt, setAttempt] = useState(() => saveAttempts.get(personaId));
   const unknown = attempt?.state === "unknown";
   const pending = attempt?.state === "pending";
-  const [error, setError] = useState<string | null>(() => saveAttempts.get(personaId)?.state === "unknown" ? "Previous save outcome unknown. Check saved customization; it will not be retried automatically." : null);
+  const [error, setError] = useState<LocalizedCopy | null>(() => saveAttempts.get(personaId)?.state === "unknown" ? { key: "avatar.previousUnknown" } : null);
   const [notice, setNotice] = useState<string | null>(null);
   const mounted = useRef(false);
   const inFlight = useRef(false);
@@ -50,8 +53,8 @@ function CustomizeForm({ personaId }: { personaId: string }) {
     const listener = (id: string, next: SaveAttempt | undefined, saved?: PersonaRecord) => {
       if (id !== personaId) return;
       setAttempt(next);
-      if (next?.state === "unknown") setError("Save outcome unknown. Check saved customization before retrying; no automatic retry will run.");
-      if (saved) { initializationSuperseded = true; apply(saved); setError(null); setNotice("Saved. Your avatar and name are shared across Homelings, details and conversation."); }
+      if (next?.state === "unknown") setError({ key: "avatar.saveUnknown" });
+      if (saved) { initializationSuperseded = true; apply(saved); setError(null); setNotice("avatar.saved"); }
     };
     saveListeners.add(listener);
     setAttempt(saveAttempts.get(personaId));
@@ -59,8 +62,8 @@ function CustomizeForm({ personaId }: { personaId: string }) {
     void fetchPersonas(AbortSignal.any([ctrl.signal, AbortSignal.timeout(10_000)])).then((result) => {
       if (ctrl.signal.aborted || initializationSuperseded) return;
       const current = result.personas.find((item) => item.id === personaId);
-      if (current) apply(current); else setError("Persona not found. Return to Homelings.");
-    }).catch((error: unknown) => { if (!ctrl.signal.aborted && !initializationSuperseded) setError(`Customization unavailable: ${error instanceof Error ? error.message : "connection lost"}. Return to the persona and try again.`); });
+      if (current) apply(current); else setError({ key: "avatar.notFound" });
+    }).catch((error: unknown) => { if (!ctrl.signal.aborted && !initializationSuperseded) setError({ key: "avatar.unavailable", params: { error: error instanceof Error ? error.message : "" } }); });
     return () => { mounted.current = false; saveListeners.delete(listener); ctrl.abort(); };
   }, [personaId]);
 
@@ -79,7 +82,7 @@ function CustomizeForm({ personaId }: { personaId: string }) {
     } catch (error) {
       const notDispatched = error instanceof PersonaAppearanceError && error.notDispatched;
       publishAttempt(personaId, notDispatched ? undefined : { state: "unknown", patch });
-      if (mounted.current && notDispatched) setError(`${error.message}. This attempt was not dispatched; unlock or correct the input before explicitly saving again.`);
+      if (mounted.current && notDispatched) setError({ key: "avatar.notDispatched", params: { error: error.message } });
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
@@ -96,36 +99,36 @@ function CustomizeForm({ personaId }: { personaId: string }) {
       if (!mounted.current) return;
       if (current && expected?.state === "unknown" && matchesAppearance(current, expected.patch)) {
         publishAttempt(personaId, undefined, current);
-        setNotice("Saved customization confirmed from the daemon.");
-      } else setError("Previous save is still unconfirmed. The daemon does not yet show those changes. Do not repeat the save; check again after the connection recovers.");
-    } catch { if (mounted.current) setError("Unable to check saved customization. Previous save remains unknown; check again when connected."); }
+        setNotice("avatar.savedConfirmed");
+      } else setError({ key: "avatar.stillUnconfirmed" });
+    } catch { if (mounted.current) setError({ key: "avatar.checkFailed" }); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
 
-  if (!persona) return <p role={error ? "alert" : "status"}>{error ?? "Loading customization…"}</p>;
+  if (!persona) return <p role={error ? "alert" : "status"}>{error ? t(error.key, { error: error.params?.error || t("common.connectionLost") }) : t("avatar.loading")}</p>;
   const disabled = busy || pending || unknown || !session.ready;
-  return <form onSubmit={save} aria-label="Customize avatar" className="space-y-7">
+  return <form onSubmit={save} aria-label={t("avatar.title")} className="space-y-7">
     <div className="flex flex-col items-center gap-4 py-3"><PersonaAvatar avatar={avatar} size="detail" /><p className="max-w-full truncate text-xl font-medium">{name || persona.name}</p></div>
     <fieldset disabled={disabled} className="space-y-7">
-      <div><label htmlFor="customize-name" className="mb-2 block font-medium">Name</label><input id="customize-name" name="name" value={name} onChange={(event) => setName(event.currentTarget.value)} maxLength={80} required autoComplete="off" className={`${control} w-full`} /></div>
-      <fieldset><legend className="mb-3 font-medium">Color</legend><div className="flex flex-wrap gap-3">
+      <div><label htmlFor="customize-name" className="mb-2 block font-medium">{t("avatar.name")}</label><input id="customize-name" name="name" value={name} onChange={(event) => setName(event.currentTarget.value)} maxLength={80} required autoComplete="off" className={`${control} w-full`} /></div>
+      <fieldset><legend className="mb-3 font-medium">{t("avatar.color")}</legend><div className="flex flex-wrap gap-3">
         {(palette.includes(avatar.color) ? palette : [avatar.color, ...palette]).map((color) => <label key={color} className="relative flex size-12 cursor-pointer items-center justify-center rounded-full focus-within:outline focus-within:outline-2 focus-within:outline-green-300">
-          <input type="radio" name="color" value={color} checked={avatar.color === color} onChange={() => setAvatar({ ...avatar, color })} aria-label={`Color ${color}`} className="peer sr-only" />
+          <input type="radio" name="color" value={color} checked={avatar.color === color} onChange={() => setAvatar({ ...avatar, color })} aria-label={t("persona.colorLabel", { color })} className="peer sr-only" />
           <span aria-hidden="true" className="size-8 rounded-full peer-checked:ring-2 peer-checked:ring-white peer-checked:ring-offset-2 peer-checked:ring-offset-neutral-950" style={{ backgroundColor: color }} />
         </label>)}
       </div></fieldset>
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-        <div><label htmlFor="customize-character" className="mb-2 block font-medium">Character</label><select id="customize-character" name="character" value={avatar.character} onChange={(event) => setAvatar({ ...avatar, character: event.currentTarget.value })} className={`${control} w-full`}>
-          {!characters.some(([value]) => value === avatar.character) ? <option value={avatar.character}>Current character (legacy)</option> : null}{characters.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        <div><label htmlFor="customize-character" className="mb-2 block font-medium">{t("avatar.character")}</label><select id="customize-character" name="character" value={avatar.character} onChange={(event) => setAvatar({ ...avatar, character: event.currentTarget.value })} className={`${control} w-full`}>
+          {!characters.some(([value]) => value === avatar.character) ? <option value={avatar.character}>{t("avatar.legacyCharacter")}</option> : null}{characters.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
         </select></div>
-        <div><label htmlFor="customize-pet" className="mb-2 block font-medium">Pet</label><select id="customize-pet" name="pet" value={avatar.pet} onChange={(event) => setAvatar({ ...avatar, pet: event.currentTarget.value })} className={`${control} w-full`}>
-          {!pets.some(([value]) => value === avatar.pet) ? <option value={avatar.pet}>Current pet (legacy)</option> : null}{pets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        <div><label htmlFor="customize-pet" className="mb-2 block font-medium">{t("avatar.pet")}</label><select id="customize-pet" name="pet" value={avatar.pet} onChange={(event) => setAvatar({ ...avatar, pet: event.currentTarget.value })} className={`${control} w-full`}>
+          {!pets.some(([value]) => value === avatar.pet) ? <option value={avatar.pet}>{t("avatar.legacyPet")}</option> : null}{pets.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
         </select></div>
       </div>
     </fieldset>
-    {!session.ready ? <p role="status" className="text-sm text-amber-200">Unlock Homeling before saving. Your draft is preserved.</p> : null}
-    {notice ? <p role="status" className="text-sm text-green-200">{notice}</p> : null}
-    {error ? <p role="alert" className="text-sm leading-relaxed text-rose-300">{error}</p> : null}
-    {unknown ? <button type="button" disabled={busy} onClick={() => void checkSaved()} className={`${control} w-full`}>{busy ? "Checking…" : "Check saved customization"}</button> : <button type="submit" disabled={disabled || !name.trim()} className="min-h-12 w-full rounded-xl bg-green-300 px-4 py-3 font-semibold text-green-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-200 disabled:opacity-50">{busy || pending ? "Saving…" : "Save changes"}</button>}
+    {!session.ready ? <p role="status" className="text-sm text-amber-200">{t("avatar.unlockBeforeSave")}</p> : null}
+    {notice ? <p role="status" className="text-sm text-green-200">{t(notice)}</p> : null}
+    {error ? <p role="alert" className="text-sm leading-relaxed text-rose-300">{t(error.key, { error: error.params?.error || t("common.connectionLost") })}</p> : null}
+    {unknown ? <button type="button" disabled={busy} onClick={() => void checkSaved()} className={`${control} w-full`}>{busy ? t("avatar.checking") : t("avatar.checkSaved")}</button> : <button type="submit" disabled={disabled || !name.trim()} className="min-h-12 w-full rounded-xl bg-green-300 px-4 py-3 font-semibold text-green-950 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-200 disabled:opacity-50">{busy || pending ? t("avatar.saving") : t("avatar.saveChanges")}</button>}
   </form>;
 }
