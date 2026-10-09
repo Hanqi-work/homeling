@@ -18,5 +18,11 @@
 - 浏览器复用 space1/p1、ownership=agent，最新 dist 一批最终确认：快捷回复44px、Save真实Tab聚焦自动滚动避fixed nav；锁POST公开模拟失败时server unlocked、UI持续未确认告警；原对话idle-lock解锁保留草稿/路径且零重放；德语设置/新建、triage两人→模拟审批后1人、任务详情/raw mirror、unknown Retry原生风险确认取消及history503都不重发。截图与详细边界 `/private/tmp/homeling-final-ui-confirm-WmdEZ4/CONFIRMATION.md`。
 - UI-only契约check/三套verify通过；公开fake无真实auth/handler/provider/设备保证。机械detector仅跑一次，变更五个TSX/CSS目标结果[]。locator/原生dialog属性/stale ref造成的自动化错误均先观察，不报告为产品失败。不创建新space、不碰用户tabs，不继续polish。
 
+## CI 与 tracker 后续
+- 首次主冻结/push 为 85ee3af1bd79fa74ac295d6fb16a8af5798f621c；已 jj new 离开。HTTPS push 两次 LibreSSL SSL_ERROR_SYSCALL 后先读回远端未更新；curl 与两种本机 Git 的只读 ls-remote 均可连接，按安装版 jj help 文档仅当次命令显式 git.executable-path=/opt/homebrew/bin/git 后推送成功。未持久改配置或关闭 TLS 校验，未证明根因就是二进制差异。Context7 resolve 当时 fetch failed，不声称官方文档查询成功。
+- 两个同 SHA 新 CI 均 failure，实际 527/1：scripts/deployment-docs.test.ts:75 的 canary shell 正常 save→check 在Linux失败。本机528/0不代替CI；唯一fixer以85新child继续跨平台TDD，不skip/改pin/放宽守卫，不修改共享0e绿色。失败证据 `/tmp/homeling-final-ci-failure-Tynbpb`，run37934872845。
+- Draft PR #22已更新失败与真实边界并readback。Spec #1、#12、#19新增评论并独立读回；所有21票仍 OPEN + ready-for-agent，不close、转人工或标PR ready。
+- 原始freeze/WIP/stale/私有备份保留；space1已finish，自建QA监听18790已停止，最终UI不再重复polish。CI脚本局部修复不要求重做UI批。
+
 ## Deviations
 - 原同 ID fixer 无法通过当前会话接口恢复；按用户最新继续实施要求，唯一继任实施者保留现场续接，未覆盖或删除原成果。不能将其描述为原 agent 成功恢复。
