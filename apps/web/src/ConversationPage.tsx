@@ -5,7 +5,8 @@ import {
 } from "@assistant-ui/react";
 import { mapTaskStatuses, mergeTranscripts, paneControlIdentity, transcriptToMessages, type Launcher, type PaneHistoryResponse, type PendingRequest, type PersonaView, type SnapshotResponse, type Task } from "@homeling/contracts";
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from "react";
-import { Link, Navigate, useParams } from "react-router";
+import { Link, Navigate, useParams, useSearchParams } from "react-router";
+import { ActivityTaskBoundary } from './ActivityTaskBoundary.tsx';
 import { approvePendingRequest, fetchLaunchers, fetchPaneHistory, fetchPendingRequests, fetchPersonas, fetchSnapshot, launchTask, ReplyRequestError, sendPaneReply, sendPersonaMessage } from "./api.ts";
 import { PendingRequestCard } from "./PendingRequestCard.tsx";
 import { RequestPollState } from "./request-poll-state.ts";
@@ -31,6 +32,7 @@ interface PaneConversationProps {
   persona?: PersonaView;
   draft: string;
   setDraft: (value: string) => void;
+  occurrenceKey?: string;
   personaStale?: boolean;
 }
 
@@ -40,9 +42,9 @@ function failureLabel(message: OutgoingMessage): string {
   return "Send failed";
 }
 
-function PaneConversation({ paneId, personaId, persona, draft, setDraft, personaStale = false }: PaneConversationProps): ReactElement {
+function PaneConversation({ paneId, personaId, persona, draft, setDraft, personaStale = false, occurrenceKey }: PaneConversationProps): ReactElement {
   const lockSession = useSessionSnapshot();
-  const taskStorageKey = conversationTaskStorageKey(paneId, personaId);
+  const taskStorageKey = occurrenceKey === undefined ? conversationTaskStorageKey(paneId, personaId) : `task-occurrence:${occurrenceKey}`;
   const [history, dispatch] = useReducer(historyReducer, paneId, initialHistoryState);
   const historyRef = useRef(history);
   historyRef.current = history;
@@ -133,7 +135,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
       const requestId = ++requestSequence.current;
       dispatch({ type: "started", paneId, requestId });
       try {
-        const response = await fetchPaneHistory(paneId, signal);
+        const response = await fetchPaneHistory(paneId, signal, undefined, occurrenceKey);
         if (signal.aborted) return;
         receiveHistory(response, requestId);
       } catch (err: unknown) {
@@ -147,7 +149,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
       if (activeController.current === session.controller) activeController.current = null;
       session.stop();
     };
-  }, [paneId, lockSession.ready, lockSession.epoch]);
+  }, [paneId, occurrenceKey, lockSession.ready, lockSession.epoch]);
 
   useEffect(() => {
     if (!lockSession.ready) return;
@@ -218,7 +220,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
     const session = startAbortableSerialPolling(async (signal) => {
       const pollVersion = requestPollState.current!.begin();
       try {
-        const requests = await fetchPendingRequests(signal);
+        const requests = await fetchPendingRequests(signal, occurrenceKey);
         if (signal.aborted) return;
         const update = requestPollState.current!.accept(pollVersion, requests, paneId);
         if (!update) return;
@@ -242,7 +244,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
       }
     }, 2000);
     return () => session.stop();
-  }, [paneId, lockSession.ready, lockSession.epoch]);
+  }, [paneId, occurrenceKey, lockSession.ready, lockSession.epoch]);
 
   function keepSettledRequest(request: PendingRequest): void {
     requestPollState.current!.settle(request.id);
@@ -261,7 +263,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
     setLoadingOlder(true);
     dispatch({ type: "started", paneId, requestId });
     try {
-      const response = await fetchPaneHistory(paneId, controller.signal, cursor);
+      const response = await fetchPaneHistory(paneId, controller.signal, cursor, occurrenceKey);
       if (controller.signal.aborted) return;
       receiveHistory(response, requestId, "older");
     } catch (err: unknown) {
@@ -314,9 +316,9 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
         dispatch({ type: "outgoing-attempt-started", paneId, id: outgoing.id, attemptOrder });
         try {
           let confirmationText: string | undefined;
-          if (existing?.textDelivered) await sendPaneReply(paneId, "");
+          if (existing?.textDelivered) await sendPaneReply(paneId, '', occurrenceKey);
           else if (personaId) confirmationText = await sendPersonaMessage(personaId, outgoing.text);
-          else await sendPaneReply(paneId, outgoing.text);
+          else await sendPaneReply(paneId, outgoing.text, occurrenceKey);
           if (confirmationText) {
             outgoingRef.current = outgoingRef.current.map((message) => message.id === outgoing.id
               ? { ...message, confirmationText }
@@ -382,7 +384,8 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
           <button
             type="button"
             onClick={() => { setLaunchOpen((open) => !open); setLaunchError(null); }}
-            disabled={launchers.length === 0}
+            disabled={occurrenceKey !== undefined || launchers.length === 0}
+            title={occurrenceKey === undefined ? undefined : '从 persona 主对话派新任务'}
             className="mt-3 min-h-11 rounded-xl border border-green-800 px-4 py-2 text-sm text-green-200 disabled:opacity-50"
           >
             派任务
@@ -438,7 +441,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
                   <PendingRequestCard
                     key={request.id}
                     request={request}
-                    onApprove={approvePendingRequest}
+                    onApprove={(id, option) => approvePendingRequest(id, option, occurrenceKey ?? request.taskOccurrenceKey)}
                     onSettled={keepSettledRequest}
                   />
                 ))}
@@ -476,6 +479,7 @@ function PaneConversation({ paneId, personaId, persona, draft, setDraft, persona
           ) : null}
           <SpecialKeyBar
             paneId={paneId}
+            occurrenceKey={occurrenceKey}
             identity={controlIdentity}
             disabled={!lockSession.ready || sendBlocked || history.outgoing.some((message) => message.status === "pending") || pendingRequests.length > 0 || !!requestError}
             onBlockedChange={(blocked) => { controlBlockedRef.current = blocked; setControlBlocked(blocked); }}
@@ -503,8 +507,10 @@ export function ConversationPage(): ReactElement {
   const { paneId: routePaneId, personaId } = useParams();
   const routePaneIdValue = routePaneId ?? "";
   const lockSession = useSessionSnapshot();
+  const [searchParams] = useSearchParams();
+  const occurrenceKey = searchParams.get('occurrence');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const draftKey = personaId ? `persona:${personaId}` : `pane:${routePaneIdValue}`;
+  const draftKey = personaId ? `persona:${personaId}` : occurrenceKey === null ? `pane:${routePaneIdValue}` : `task-occurrence:${occurrenceKey}`;
   const draft = drafts[draftKey] ?? "";
   const setDraft = (value: string) => setDrafts((current) => ({ ...current, [draftKey]: value }));
   const [persona, setPersona] = useState<PersonaView | null>(null);
@@ -549,5 +555,10 @@ export function ConversationPage(): ReactElement {
   }
 
   if (!routePaneIdValue) return <main className="p-6 text-sm">pane id missing</main>;
+  if (occurrenceKey !== null) {
+    return <ActivityTaskBoundary paneId={routePaneIdValue} occurrenceKey={occurrenceKey} returnTo="/">
+      {() => <PaneConversation key={`${routePaneIdValue}:${occurrenceKey}`} paneId={routePaneIdValue} occurrenceKey={occurrenceKey} draft={draft} setDraft={setDraft} />}
+    </ActivityTaskBoundary>;
+  }
   return <PaneConversation key={routePaneIdValue} paneId={routePaneIdValue} draft={draft} setDraft={setDraft} />;
 }

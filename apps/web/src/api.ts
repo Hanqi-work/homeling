@@ -208,8 +208,8 @@ export async function launchTask(launcher: Launcher, paneId?: string, personaId?
   return result;
 }
 
-export function fetchPendingRequests(signal?: AbortSignal): Promise<PendingRequest[]> {
-  return getJson("requests", signal);
+export function fetchPendingRequests(signal?: AbortSignal, occurrenceKey?: string): Promise<PendingRequest[]> {
+  return getJson(occurrenceKey === undefined ? 'requests' : `activity/task/${encodeURIComponent(occurrenceKey)}/requests`, signal);
 }
 
 export interface ApprovalResponse {
@@ -217,11 +217,11 @@ export interface ApprovalResponse {
   readonly outcome: "submitted" | "unknown" | "already-handled" | "stale" | "not-submitted";
 }
 
-export async function approvePendingRequest(requestId: string, optionId: string): Promise<ApprovalResponse> {
+export async function approvePendingRequest(requestId: string, optionId: string, occurrenceKey?: string): Promise<ApprovalResponse> {
   const response = await sessionMutationFetch(`${API_PREFIX}requests/${encodeURIComponent(requestId)}/approve`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({ optionId }),
+    body: JSON.stringify({ optionId, ...(occurrenceKey === undefined ? {} : { occurrenceKey }) }),
   });
   let result: (ApprovalResponse & { deliveryUnknown?: boolean }) | null = null;
   try {
@@ -259,7 +259,6 @@ export function fetchPaneScreen(paneId: string, signal?: AbortSignal, occurrence
 
 export async function stopPaneTask(paneId: string, occurrenceKey?: string): Promise<void> {
   const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "stop", occurrenceKey)}`, {
-
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: "{}",
@@ -282,8 +281,7 @@ export interface ControlKeyResult {
 /** One write only. Acknowledgement is not TUI consumption; unknown must never be retried automatically. */
 export async function sendPaneControlKey(paneId: string, action: ControlKeyAction, identity: string, occurrenceKey?: string): Promise<ControlKeyResult> {
   try {
-    const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "control-key", occurrenceKey)}`, {
-
+    const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, 'control-key', occurrenceKey)}`, {
       method: "POST", headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ action, identity, confirmed: true }), signal: AbortSignal.timeout(15000),
     });
@@ -321,7 +319,6 @@ export class ReplyRequestError extends Error {
 /** Submit text to an existing Collie pane; history polling, not this response, confirms delivery. */
 export async function sendPaneReply(paneId: string, text: string, occurrenceKey?: string): Promise<void> {
   const response = await sessionMutationFetch(`${API_PREFIX}${taskPanePath(paneId, "reply", occurrenceKey)}`, {
-
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
     body: JSON.stringify({ text, submit: true }),

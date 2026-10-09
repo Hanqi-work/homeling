@@ -246,7 +246,7 @@ export class PendingRequestStore {
   private readonly identities = new Map<string, string>();
   private readonly actions = new Map<string, Map<string, readonly string[]>>();
   private readonly activeByPane = new Map<string, { id: string; identity: string }>();
-  private readonly suppressedByPane = new Map<string, string>();
+  private readonly suppressedByPane = new Map<string, { identity: string; taskOccurrenceKey?: string }>();
   private readonly claimed = new Set<string>();
   private sequence = 0;
   private collectionGeneration = 0;
@@ -259,7 +259,17 @@ export class PendingRequestStore {
     return generation === this.collectionGeneration;
   }
 
-  observe(pane: PaneWire, detected: DetectedRequest | null, now = Date.now()): PendingRequest | null {
+  /** Metadata revocation must also apply while a write is claimed or a screen read is unavailable. */
+  refreshPersonaOwnership(paneId: string, personaId?: string): void {
+    this.requests = this.requests.map(request => {
+      if (request.paneId !== paneId || request.status !== 'pending' || request.personaId === personaId) return request;
+      const { personaId: _previousPersonaId, ...base } = request;
+      return { ...base, ...(personaId ? { personaId } : {}) };
+    });
+  }
+
+  observe(pane: PaneWire, detected: DetectedRequest | null, now = Date.now(), personaId?: string, taskOccurrenceKey?: string): PendingRequest | null {
+    this.refreshPersonaOwnership(pane.paneId, personaId);
     const active = this.activeByPane.get(pane.paneId);
     if (!detected) {
       if (active && this.claimed.has(active.id)) return null;
@@ -268,7 +278,7 @@ export class PendingRequestStore {
       this.expire(now);
       return null;
     }
-    if (active?.identity === detected.identity) {
+    if (active?.identity === detected.identity && this.find(active.id)?.request.taskOccurrenceKey === taskOccurrenceKey) {
       this.signatures.set(active.id, detected.signature);
       const existing = this.requests.find((request) => request.id === active.id && request.status === "pending");
       if (!existing) {
@@ -287,7 +297,7 @@ export class PendingRequestStore {
     if (active && this.claimed.has(active.id)) return null;
     if (active) this.settle(active.id, "expired");
     const suppressedIdentity = this.suppressedByPane.get(pane.paneId);
-    if (suppressedIdentity === detected.identity) {
+    if (suppressedIdentity?.identity === detected.identity && suppressedIdentity.taskOccurrenceKey === taskOccurrenceKey) {
       this.expire(now);
       return null;
     }
@@ -296,8 +306,8 @@ export class PendingRequestStore {
     const id = `request:${this.instanceId}:${++this.sequence}`;
     const createdAt = new Date(now).toISOString();
     const options = detected.options.map(({ id, label }) => ({ id, label }));
-    // Collie space/workspace is the persona ownership boundary (GLOSSARY.md).
-    const common = { id, paneId: pane.paneId, personaId: pane.workspaceId, createdAt, status: "pending" as const };
+    // The HTTP collection path supplies the daemon registry identity, not the workspace ID.
+    const common = { id, paneId: pane.paneId, ...(personaId ? { personaId } : {}), ...(taskOccurrenceKey ? { taskOccurrenceKey } : {}), createdAt, status: "pending" as const };
     const request: PendingRequest = detected.kind === "preview-select"
       ? { ...common, kind: "preview-select", payload: { question: detected.question, options, preview: detected.preview } }
       : { ...common, kind: "prompt-select", payload: { question: detected.question, subject: detected.subject, options } };
@@ -343,7 +353,7 @@ export class PendingRequestStore {
       const active = this.activeByPane.get(existing.paneId);
       if (active?.id === id) this.activeByPane.delete(existing.paneId);
       const identity = this.identities.get(id);
-      if (identity) this.suppressedByPane.set(existing.paneId, identity);
+      if (identity) this.suppressedByPane.set(existing.paneId, { identity, taskOccurrenceKey: existing.taskOccurrenceKey });
     }
     this.claimed.delete(id);
     return this.requests.find((request) => request.id === id) ?? null;
@@ -396,7 +406,7 @@ async function upstreamJson<T>(url: string, fetcher: BridgeFetch, login: string 
   }
 }
 
-async function readPaneText(cfg: DaemonConfig, fetcher: BridgeFetch, paneId: string, login: string | null): Promise<string> {
+export async function readPaneText(cfg: DaemonConfig, fetcher: BridgeFetch, paneId: string, login: string | null): Promise<string> {
   const response = await upstreamJson<{ text?: unknown; truncated?: boolean }>(
     proxyTargetUrl(`/lite/api/pane/${encodeURIComponent(paneId)}`, cfg), fetcher, login,
   );
@@ -410,6 +420,7 @@ export async function collectPendingRequests(
   store: PendingRequestStore,
   login: string | null = null,
   now = Date.now(),
+  resolvePersona?: (pane: PaneWire) => Promise<string | { personaId: string; taskOccurrenceKey?: string } | undefined>,
 ): Promise<PendingRequest[]> {
   const generation = store.beginCollection();
   const snapshot = await upstreamJson<SnapshotResponse>(proxyTargetUrl("/lite/api/snapshot", cfg), fetcher, login);
@@ -431,10 +442,24 @@ export async function collectPendingRequests(
         continue;
       }
       const detected = detectPendingRequest(read.text);
-      if (detected) store.observe(pane, detected, now);
+      if (detected) {
+        const owner = resolvePersona ? await resolvePersona(pane) : undefined;
+        if (!store.isCurrentCollection(generation)) return store.listPending(now);
+        store.observe(pane, detected, now, typeof owner === 'string' ? owner : owner?.personaId, typeof owner === 'object' ? owner.taskOccurrenceKey : undefined);
+      }
       else store.expirePaneRequest(pane.paneId);
     } catch {
       // A transient read failure is not evidence that the approval disappeared.
+    }
+  }
+  if (resolvePersona && store.isCurrentCollection(generation)) {
+    // A failed/truncated screen cannot settle a request, but registry revocation still clears its owner.
+    for (const pending of store.listPending(now)) {
+      const pane = panes.find(item => item.paneId === pending.paneId);
+      if (!pane) continue;
+      const owner = await resolvePersona(pane);
+      if (!store.isCurrentCollection(generation)) break;
+      store.refreshPersonaOwnership(pane.paneId, typeof owner === 'string' ? owner : owner?.personaId);
     }
   }
   return store.listPending(now);

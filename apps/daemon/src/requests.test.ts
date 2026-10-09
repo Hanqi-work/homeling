@@ -60,6 +60,34 @@ function verifyExpectedPrompt(freshText: string, expected: string): boolean {
   return false;
 }
 
+test('real task occurrence metadata preserves approval binding and expires the old card when the same pane runs a new task', () => {
+  const store = new PendingRequestStore();
+  const detected = detectPendingRequest(permissionScreen)!;
+  const first = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-1')!;
+  expect(first).toMatchObject({ personaId: 'persona-real', taskOccurrenceKey: 'task-run-1' });
+  const repeated = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-1')!;
+  expect(repeated.id).toBe(first.id);
+  const replacement = store.observe(pane, detected, Date.now(), 'persona-real', 'task-run-2')!;
+  expect(replacement.id).not.toBe(first.id);
+  expect(store.find(first.id)?.request.status).toBe('expired');
+  expect(replacement.taskOccurrenceKey).toBe('task-run-2');
+});
+
+test('registry removal clears cached pending persona identity rather than retaining an archived owner', () => {
+  const store = new PendingRequestStore();
+  const detected = detectPendingRequest(permissionScreen)!;
+  const first = store.observe(pane, detected, Date.now(), 'persona-removed')!;
+  const refreshed = store.observe(pane, detected, Date.now(), undefined)!;
+  expect(refreshed.id).toBe(first.id);
+  expect(refreshed).not.toHaveProperty('personaId');
+  expect(store.listPending()[0]).not.toHaveProperty('personaId');
+  const taskStore = new PendingRequestStore();
+  const claimed = taskStore.observe(pane, detected, Date.now(), 'persona-removed', 'task-run')!;
+  expect(taskStore.claim(claimed.id)).toBe(true);
+  taskStore.observe(pane, detected, Date.now(), undefined);
+  expect(taskStore.listPending()[0]).not.toHaveProperty('personaId');
+});
+
 describe("pending request extraction", () => {
   test("extracts a real-shaped permission prompt and its selectable choices", () => {
     const detected = detectPendingRequest(permissionScreen);

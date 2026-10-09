@@ -4,6 +4,7 @@
  * (ADR-0004: zero-touch — nothing under ~/.local/share/collie is read or written).
  */
 import { checkAccess, isLoopbackAddress, isLoopbackRequest, type AccessConfig } from "./access.ts";
+import type { PaneWire } from '@homeling/contracts';
 import { dirname, join } from "node:path";
 import { ActivityLedger, TaskOccurrenceUnavailable } from "./activity-ledger.ts";
 import { createActivityObserver } from "./activity-observer.ts";
@@ -24,6 +25,9 @@ import { createDaemonSystemAdmissions } from "./system-admission.ts";
 import { SessionController } from "./session-controller.ts";
 import { SessionLocked, lockedResponse, type MutationAdmission } from "./session-lock.ts";
 import { loadUnlockVerifier } from "./unlock-credentials.ts";
+import { handlePushRequest, type PushApiRuntime } from './push-api.ts';
+import { initializePushRuntime, type PushDaemonRuntime } from './push-runtime.ts';
+const pushRuntimes = new WeakMap<DaemonConfig, Promise<PushDaemonRuntime | null>>();
 
 const sessionControllers = new WeakMap<DaemonConfig, SessionController>();
 function sessionController(cfg: DaemonConfig): SessionController {
@@ -69,6 +73,14 @@ function personaRuntime(cfg: DaemonConfig, fetcher: BridgeFetch): PersonaRuntime
     personaRuntimes.set(cfg, runtime);
   }
   return runtime;
+}
+
+async function resolvePendingOwnership(runtime: PersonaRuntime, pane: PaneWire): Promise<{ personaId: string; taskOccurrenceKey?: string } | undefined> {
+  const persona = (await runtime.registry.list()).find(item => item.spaceId === pane.workspaceId);
+  if (!persona) return undefined;
+  if (persona.mainPaneId === pane.paneId) return { personaId: persona.id };
+  const task = await runtime.activity?.ownership(pane.paneId);
+  return { personaId: persona.id, ...(task?.personaId === persona.id && task.spaceId === pane.workspaceId && task.paneId === pane.paneId ? { taskOccurrenceKey: task.occurrenceKey } : {}) };
 }
 
 function isPersonaWrite(pathname: string): boolean {
@@ -125,6 +137,7 @@ export async function handleRequest(
   fetcher: BridgeFetch = fetch,
   runtimeOverride?: PersonaRuntime,
   sessionOverride?: SessionController,
+  pushOverride?: PushApiRuntime,
 ): Promise<Response> {
   const denied = checkAccess(req, accessConfigOf(cfg));
   if (!denied.ok) {
@@ -152,6 +165,13 @@ export async function handleRequest(
       const admitted = sessions.admission(req, subject);
       admission = { assert: () => admitted.assert(), dispatch<T>(effect: () => T): T { return admitted.dispatch(() => { dispatched = true; return effect(); }); } };
     } catch { return lockedResponse(); }
+  }
+  if (pathname.startsWith('/lite/api/push/')) {
+    try {
+      const push = pushOverride ?? await pushRuntimes.get(cfg);
+      if (!push) return Response.json({ error: 'Configure HOMELING_PUSH_SUBJECT and restart the daemon to enable notifications' }, { status: 503, headers: { 'cache-control': 'no-store' } });
+      return await handlePushRequest(req, push, subject, admission) ?? new Response('not found', { status: 404 });
+    } catch { return Response.json({ error: 'push unavailable' }, { status: 503, headers: { 'cache-control': 'no-store' } }); }
   }
   const upstreamFetch = fetcher;
   fetcher = (target, init) => {
@@ -292,9 +312,24 @@ export async function handleRequest(
   if (req.method === "POST" && /^\/lite\/api\/pane\/[^/]+\/control-key$/.test(pathname)) {
     return sendControlKey(req, cfg, fetcher, store);
   }
+  const taskRequestsMatch = pathname.match(/^\/lite\/api\/activity\/task\/([^/]+)\/requests$/);
+  if (taskRequestsMatch) {
+    if (req.method !== 'GET') return Response.json({ error: 'method not allowed' }, { status: 405 });
+    if (!runtime.activity) return Response.json({ error: 'Activity unavailable' }, { status: 503 });
+    let key: string;
+    try { key = decodeURIComponent(taskRequestsMatch[1]!); } catch { return Response.json({ error: 'invalid task occurrence' }, { status: 400 }); }
+    try {
+      const task = await runtime.activity.assertCurrent(key);
+      const requests = await collectPendingRequests(cfg, fetcher, store, req.headers.get('tailscale-user-login'), Date.now(), pane => resolvePendingOwnership(runtime, pane));
+      await runtime.activity.assertCurrent(key);
+      return Response.json(requests.filter(item => item.paneId === task.paneId && item.taskOccurrenceKey === key), { headers: { 'cache-control': 'no-store' } });
+    } catch (error) {
+      return Response.json({ error: 'Task occurrence is unavailable; inspect recorded activity', executed: false }, { status: error instanceof TaskOccurrenceUnavailable ? 409 : 502, headers: { 'cache-control': 'no-store' } });
+    }
+  }
   if (pathname === API_REQUESTS_PATH && req.method === "GET") {
     try {
-      return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login")));
+      return Response.json(await collectPendingRequests(cfg, fetcher, store, req.headers.get("tailscale-user-login"), Date.now(), pane => resolvePendingOwnership(runtime, pane)));
     } catch {
       return Response.json({ error: "bridge unavailable" }, { status: 502 });
     }
@@ -308,9 +343,9 @@ export async function handleRequest(
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
-    let body: { optionId?: unknown };
+    let body: { optionId?: unknown; occurrenceKey?: unknown };
     try {
-      body = await req.json() as { optionId?: unknown };
+      body = await req.json() as { optionId?: unknown; occurrenceKey?: unknown };
     } catch {
       return Response.json({ error: "bad body" }, { status: 400 });
     }
@@ -323,9 +358,40 @@ export async function handleRequest(
     } catch {
       return Response.json({ error: "invalid request id" }, { status: 400 });
     }
+    const record = store.find(id)?.request;
+    if (body.occurrenceKey !== undefined && (typeof body.occurrenceKey !== 'string' || body.occurrenceKey !== record?.taskOccurrenceKey)) {
+      return Response.json({ status: 'expired', outcome: 'stale', executed: false }, { status: 409 });
+    }
+    const taskKey = record?.taskOccurrenceKey;
+    if (taskKey) {
+      try {
+        if (!runtime.activity || (await runtime.activity.assertCurrent(taskKey)).paneId !== record?.paneId) throw new TaskOccurrenceUnavailable();
+      } catch { return Response.json({ status: 'expired', outcome: 'stale', executed: false }, { status: 409 }); }
+    }
+    let lockRejected = false;
+    const approvalFetch: BridgeFetch = async (target, init) => {
+      if ((init?.method ?? 'GET') === 'GET') return fetcher(target, init);
+      try {
+        if (!taskKey) return await fetcher(target, init);
+        return await runtime.activity!.dispatchCurrent(taskKey, admission!, task => {
+          const targetUrl = new URL(String(target));
+          const expectedUrl = new URL(proxyTargetUrl(`/lite/api/pane/${encodeURIComponent(task.paneId)}/keys`, cfg, 'POST'));
+          if (task.paneId !== record?.paneId || targetUrl.href !== expectedUrl.href || controlKeyBlocksText(cfg, task.paneId)) throw new TaskOccurrenceUnavailable();
+          return upstreamFetch(target, init);
+        });
+      } catch (error) {
+        if (error instanceof SessionLocked) {
+          lockRejected = true;
+          return Response.json({ ok: false, code: 'prompt.read_failed' }, { status: 423 });
+        }
+        if (error instanceof TaskOccurrenceUnavailable) return Response.json({ ok: false, code: 'prompt_changed' }, { status: 409 });
+        throw error;
+      }
+    };
     const outcome = await approvePendingRequest(
-      cfg, fetcher, store, id, body.optionId, Date.now(), req.headers.get("tailscale-user-login"),
+      cfg, approvalFetch, store, id, body.optionId, Date.now(), req.headers.get("tailscale-user-login"),
     );
+    if (lockRejected) return sessionRefusal();
     return Response.json(outcome, { status: outcome.status === "expired" ? 409 : 200 });
   }
 
@@ -381,6 +447,11 @@ export function startDaemon(cfg: DaemonConfig = daemonConfigFromEnv({})): Return
   });
   const runtime = personaRuntime(cfg, globalThis.fetch);
   const system = createDaemonSystemAdmissions();
+  const push = initializePushRuntime(cfg, runtime, system).catch(() => {
+    console.error('[homeling-daemon] independent push initialization failed');
+    return null;
+  });
+  pushRuntimes.set(cfg, push);
   const activityObserver = createActivityObserver(runtime.activity!, runtime.herdr, system.activityObserve);
   runtime.observeTask = (paneId) => activityObserver.watch(paneId);
   void recoverPersonas(runtime, system.personaRecovery).catch((error: unknown) => {
