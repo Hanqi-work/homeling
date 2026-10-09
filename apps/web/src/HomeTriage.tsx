@@ -1,3 +1,4 @@
+import { useLocale } from "./locale.tsx";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { PendingRequest, PersonaView } from "@homeling/contracts";
@@ -18,6 +19,7 @@ interface TriageData {
 
 /** Read-only home summary. The session owner may suspend it without renewing a lease. */
 export function HomeTriage({ suspended = false, pollIntervalMs = 2000 }: { suspended?: boolean; pollIntervalMs?: number }) {
+  const { t, locale } = useLocale();
   const [data, setData] = useState<TriageData>({ personas: [], requests: [], taskLinks: new Map() });
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -77,16 +79,16 @@ export function HomeTriage({ suspended = false, pollIntervalMs = 2000 }: { suspe
   const count = new Set(pending.map(({ persona }) => persona.id)).size;
   if (suspended) return null;
   return <>
-    {error && <p role="alert" className="text-sm text-amber-300">待处理请求更新失败，请稍后重试。{count > 0 ? "以下为上次确认的请求。" : ""}</p>}
-    {count > 0 && <section aria-label="待处理请求" className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4">
-      <h2 className="font-medium" aria-live="polite">{count} 个伙伴需要你</h2>
+    {error && <p role="alert" className="text-sm text-amber-300">{t("triage.updateFailed")}{count > 0 ? ` ${t("triage.lastConfirmed")}` : ""}</p>}
+    {count > 0 && <section aria-label={t("triage.label")} className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4">
+      <h2 className="font-medium" aria-live="polite">{t(count === 1 ? "triage.needsYouOne" : "triage.needsYou", { count: count.toLocaleString(locale) })}</h2>
       <ul className="mt-2 space-y-2">
         {pending.map(({ request, persona }) => {
           const to = request.paneId === persona.mainPaneId ? `/persona/${encodeURIComponent(persona.id)}` : data.taskLinks.get(request.id);
           return <li key={request.id}>
             {to ? <Link className="block rounded-lg p-2 text-sm underline underline-offset-4 focus-visible:outline focus-visible:outline-2" to={to}>
               {persona.name} · {request.payload.question}
-            </Link> : <p className="p-2 text-sm">{persona.name} · {request.payload.question}<span className="block text-xs text-amber-200">暂不可确认任务归属，请稍后重试。</span></p>}
+            </Link> : <p className="p-2 text-sm">{persona.name} · {request.payload.question}<span className="block text-xs text-amber-200">{t("triage.ownershipUnknown")}</span></p>}
           </li>;
         })}
       </ul>

@@ -1,4 +1,5 @@
 import type { PersonaAvatar as Avatar, PersonaView } from "@homeling/contracts";
+import { useLocale } from "./locale.tsx";
 
 export interface PersonaAvatarProps {
   avatar: Avatar;
@@ -11,6 +12,7 @@ export interface PersonaAvatarProps {
 const sizes = { card: "size-14", detail: "size-28", conversation: "size-10" };
 
 export function PersonaAvatar({ avatar, size = "card", persona, stale = false }: PersonaAvatarProps) {
+  const { t } = useLocale();
   const character = avatar.character ?? "smile";
   const pet = avatar.pet ?? "none";
   const thinking = !stale && persona?.status === "thinking" && persona.statusSource === "agent" && !persona.paused && !persona.needsAttention;
@@ -27,6 +29,6 @@ export function PersonaAvatar({ avatar, size = "card", persona, stale = false }:
         <path d="M11 17v1m10-1v1m-7 4 2 2 2-2" />
       </svg> : null}
     </span>
-    {thinking ? <span role="status" className="sr-only">Thinking</span> : null}
+    {thinking ? <span role="status" className="sr-only">{t("persona.thinking")}</span> : null}
   </span>;
 }

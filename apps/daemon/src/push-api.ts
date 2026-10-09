@@ -2,6 +2,7 @@ import { lockedResponse, SessionLocked, type MutationAdmission } from './session
 import type { PushPersistence } from './push-store.ts';
 import { sendPushTest, type PushTransport } from './push-output.ts';
 import { validatePushSubscription } from './push-transport.ts';
+import { isLocale, resolveLocale } from '@homeling/contracts';
 
 export interface PushApiRuntime { readonly store: PushPersistence; readonly publicKey: string; readonly transport: PushTransport }
 const noStore = { 'cache-control': 'no-store' };
@@ -28,9 +29,9 @@ export async function handlePushRequest(req: Request, runtime: PushApiRuntime, o
   if (req.method === 'GET' && path === '/lite/api/push/status') {
     const state = await runtime.store.load();
     const retractTags = [...new Set([...Object.values(state.pendingOccurrences).filter(item => !item.active).map(item => `homeling-request-${item.occurrenceKey}`), ...state.retractTags])];
-    return Response.json({ publicKey: runtime.publicKey, preferences: state.preferences, retractTags, subscriptions: state.subscriptions.filter(s => s.owner === owner).map(s => ({ endpoint: s.endpoint })) }, { headers: noStore });
+    return Response.json({ publicKey: runtime.publicKey, preferences: state.preferences, retractTags, subscriptions: state.subscriptions.filter(s => s.owner === owner).map(s => ({ endpoint: s.endpoint, locale: resolveLocale(s.locale) })) }, { headers: noStore });
   }
-  if (req.method !== 'POST' || !['subscribe', 'unsubscribe', 'preferences', 'test-send'].some(action => path === `/lite/api/push/${action}`)) return Response.json({ error: 'method or route not allowed' }, { status: 405, headers: noStore });
+  if (req.method !== 'POST' || !['subscribe', 'unsubscribe', 'preferences', 'test-send', 'locale'].some(action => path === `/lite/api/push/${action}`)) return Response.json({ error: 'method or route not allowed' }, { status: 405, headers: noStore });
   try {
     if (!admission || 'scope' in admission) return lockedResponse();
     admission.assert();
@@ -40,14 +41,28 @@ export async function handlePushRequest(req: Request, runtime: PushApiRuntime, o
     catch (error) { return Response.json({ error: error instanceof PushBodyTooLarge ? 'body too large' : 'invalid JSON' }, { status: error instanceof PushBodyTooLarge ? 413 : 400 }); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return Response.json({ error: 'invalid body' }, { status: 400 });
     admission.assert();
+    if (path.endsWith('/locale')) {
+      if (typeof body.endpoint !== 'string' || !isLocale(body.locale) || Object.keys(body).some(key => key !== 'endpoint' && key !== 'locale')) return Response.json({ error: 'endpoint and supported locale required', code: 'push.invalid_locale' }, { status: 400, headers: noStore });
+      const locale = body.locale;
+      const updated = await runtime.store.mutate(state => {
+        const index = state.subscriptions.findIndex(s => s.endpoint === body.endpoint && s.owner === owner);
+        if (index === -1) return { next: state, result: false };
+        const subscriptions = [...state.subscriptions];
+        subscriptions[index] = { ...subscriptions[index]!, locale };
+        return { next: { ...state, subscriptions }, result: true };
+      }, admission);
+      return updated ? Response.json({ ok: true, locale }, { headers: noStore }) : Response.json({ error: 'subscription not found', code: 'push.subscription_missing' }, { status: 404, headers: noStore });
+    }
     if (path.endsWith('/subscribe')) {
+      if (body.locale !== undefined && !isLocale(body.locale)) return Response.json({ error: 'supported locale required', code: 'push.invalid_locale' }, { status: 400, headers: noStore });
+      const requestedLocale = body.locale;
       const subscription = validatePushSubscription(body);
       if (!subscription) return Response.json({ error: 'unsupported or invalid push subscription' }, { status: 400 });
       await runtime.store.mutate(state => {
         const existing = state.subscriptions.find(s => s.endpoint === subscription.endpoint);
         if (existing && existing.owner !== owner) throw new Error('subscription belongs to another identity');
         if (state.subscriptions.length >= 100 && !existing) throw new Error('subscription limit reached');
-        return { next: { ...state, subscriptions: [...state.subscriptions.filter(s => s.endpoint !== subscription.endpoint), { ...subscription, owner }] }, result: undefined };
+        return { next: { ...state, subscriptions: [...state.subscriptions.filter(s => s.endpoint !== subscription.endpoint), { ...subscription, owner, locale: requestedLocale ?? resolveLocale(existing?.locale) }] }, result: undefined };
       }, admission);
       return Response.json({ ok: true }, { status: 201, headers: noStore });
     }

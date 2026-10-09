@@ -2,13 +2,13 @@
 
 住在自己电脑上的 AI 伙伴，手机上对话、派任务、审批、查看结果。目标是 Dots / Grok Bot / Muse 式的 persona agent；基于已有 herdr / Collie，**不是 Collie fork，也不替换旧 UI**。
 
-**当前是开发中的 v1，不是正式发布。** 已接线 persona 创建与导航、持久 Markdown 记忆/编辑、头像与真实状态动效、Activity、对话/送达确认、权限卡片、派任务/详情、STT、特殊键、PWA，以及独立 VAPID / 订阅存储 / Web Push 发送、具体审批摘要和可信完成/失败通知。用户业务已消费 #19 自持服务端写锁与显式解锁入口；未配置本机解锁凭据时 fail-closed。triage、多语言全量与通知 debounce / coalesce 仍由对应后续票收口；不把这些当作 #15 已完成。真机安装、锁屏通知和双通道并存仍须人工验收。
+**当前是开发中的 v1，不是正式发布。** 已接线 persona 创建与导航、持久 Markdown 记忆/编辑、头像与真实状态动效、Activity、对话/送达确认、权限卡片、派任务/详情、STT、特殊键、PWA、首页 triage，以及独立 VAPID / 订阅存储 / Web Push 发送、具体审批摘要和可信完成/失败通知。同时包含六语言界面与逐订阅通知语言设置、自持服务端 idle-lock 与显式解锁，以及通知 debounce / coalesce / 持久去重。未配置本机解锁凭据时 fail-closed；通知可靠性只覆盖可观察的请求代际，不能识别未观察到的同内容新审批。真机安装、锁屏通知和双通道并存仍须人工验收。
 
 正式发布门禁：完成 [PRD §9](PRD.md#9-v1-功能清单验收基线) 全部必选能力，并通过对应设备验收。README / LICENSE 就位不等于 v1 已发布。
 
 ## 架构
 
-Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，自持 push 与通知 tag 墓碑也是 daemon 自持数据；通知 debounce / coalesce 待 #16 收口。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
+Bun + TypeScript daemon 独立监听 `127.0.0.1:8790`，托管 React 19 / Vite 前端构建产物 `apps/web/dist`。手机经 Tailscale HTTPS 同源访问 `/lite/` 和 `/lite/api/*`；daemon 自持 Host / Origin / trusted-user 鉴权，并按窄白名单反代本机 Collie bridge `127.0.0.1:8787`。Collie 仍占据根 `/`，herdr 仍运行 agent panes。实体映射为 persona ↔ space、project ↔ tab、task ↔ pane，每 persona 一个长期主 pane；registry 与 memory 是 daemon 自持数据，自持 push、debounce / coalesce、durable claims 与通知 tag 墓碑也由 daemon 独立管理。见 [GLOSSARY](GLOSSARY.md)、[ADR-0004](docs/adr/0004-zero-touch-no-collie-writes.md)、[ADR-0005](docs/adr/0005-bridge-api-reverse-proxy.md)。ADR-0001 只沿用独立 launchd 宿主设计，其旧 bridge 反代部署方案已由 ADR-0004/0005 取代。
 
 ```text
 手机（tailnet） → Tailscale Serve HTTPS :443
@@ -49,7 +49,18 @@ bun run build
 
 必须选择包含所需实现的 revision；未正式发布前不要假定默认分支等于 integration 开发进度。构建结果只在 `apps/web/dist`，不复制进 Collie。以下命令都在仓库根目录执行。
 
-### 3. 配置身份并安装 daemon
+### 3. 初始化本机解锁状态、配置身份并安装 daemon
+
+首次部署前，由**本机操作者**在仓库根目录执行以下显式初始化命令；这是文档示例，不代表本项目已经替你初始化或部署：
+
+```bash
+HOMELING_DATA_DIR="$HOME/Library/Application Support/Homeling" \
+  bun apps/daemon/src/unlock-credentials-cli.ts init
+```
+
+解锁目录必须在所有版本控制工作区与 Collie 目录之外，归当前用户所有、无 symlink、权限 `0700`；`unlock-secret` 与 `unlock-verifier.json` 权限 `0600`。仅在本机私下读取 `unlock-secret` 并通过受信任的 Tailscale HTTPS 解锁界面输入；不要打印到共享终端、日志、聊天、仓库或浏览器持久化存储。daemon 不会自动生成、恢复或轮换解锁凭据。已有状态、部分初始化、损坏文件或 `.unlock-rotation-pending` 均应先由本机操作者检查，**不删除状态后重跑 init，不把 rotate 当修复命令**。
+
+需要主动轮换且现有状态完整时，可由本机操作者使用同一 CLI 的 `rotate`，并使用与 daemon 完全一致的 `HOMELING_DATA_DIR`；旧会话在后续 admission / commit 检查时失效。自定义目录时，必须在实际 daemon/plist 环境中同步该路径；安装脚本不持久化 `HOMELING_DATA_DIR`，仅在 shell export 不会改变 launchd 的配置。使用上述默认目录则不需额外 plist 路径设置。
 
 将示例替换为**实际 Tailscale 登录名**与本机完整 MagicDNS 域名（无 scheme、端口或尾斜线）。登录名不是机器昵称，也不是显示姓名；应与 Serve 注入的 `Tailscale-User-Login` 完全一致。多个用户用逗号分隔，且这些用户访问 bridge 时也须满足 Collie 自己的权限。
 
@@ -78,6 +89,11 @@ curl -fsS http://127.0.0.1:8790/lite/api/health
 | `HOMELING_PUSH_SUBJECT` | 独立 VAPID 联系地址，如 `mailto:you@example.com`；未设则关闭 Homeling push | 否，需明确配置 daemon/plist |
 | `HOMELING_PUSH_DIR` | `~/Library/Application Support/Homeling/push`；独立 VAPID / 订阅 / 去重 / cursor，目录 0700、文件 0600 | 否，需明确配置 daemon/plist |
 | `HOMELING_MEMORY_DIR` | `~/Library/Application Support/Homeling/memory`（或 `HOMELING_DATA_DIR/memory`），persona Markdown 与冻结会话文件；须为绝对路径、无 symlink、owner-only | 否，仅 daemon 环境支持 |
+| `HOMELING_DATA_DIR` | `~/Library/Application Support/Homeling`；本机 unlock 状态目录，CLI 与 daemon 必须使用同一路径；不统一改动 registry / Activity / push 的默认路径 | 否，需明确配置 daemon/plist |
+| `HOMELING_REGISTRY_PATH` | `~/.config/homeling/registry.json`；persona 持久 registry | 否，仅 daemon 环境支持 |
+| `HOMELING_ACTIVITY_PATH` | registry 文件同目录的 `activity.json`；任务归属与可信 Activity 账本 | 否，仅 daemon 环境支持 |
+| `HERDR_SOCKET_PATH` | `~/.config/herdr/herdr.sock`；已运行 herdr 的 Unix socket | 否，仅 daemon 环境支持 |
+| `HOMELING_SESSION_DEV_HTTP` | 默认关闭；`1` 仅启用明确的 localhost HTTP 开发会话，不用于 Tailscale/生产 | 否，生产不要设置 |
 
 推荐保持默认端口/产物/bridge 地址。非默认 `WEB_DIST` / `BRIDGE_ORIGIN` 需自行在 plist 中明确配置并重新加载，单纯 export 后运行安装脚本不生效。不要关闭 Host 检查来解决 403。
 
@@ -108,7 +124,7 @@ daemon 启动可能需要片刻，若立即检查失败，先查 launchd / 日�
 
 手机走一轮“派活 → 审批 → 收结果”；确认发送正文进入 history 后才显示“已送达”（HTTP 2xx 不等于 agent 已消费）。中断按钮仅请求 Ctrl+C，不关闭 pane，不保证进程已终止，后续状态才是依据；launch 超时也不证明上游已回滚，残留需查看原始 pane / 旧 UI 排查。
 
-PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`。当前更新检测仅写 console，并提供调试入口 `window.__homelingApplyUpdate()`，**没有用户可见的更新提示或刷新按钮**。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作、锁屏 push 或 idle-lock 已完成。
+PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite/`。当前更新检测仅写 console，并提供调试入口 `window.__homelingApplyUpdate()`，**没有用户可见的更新提示或刷新按钮**。图标/安装/离线表现与根路径 SW 共存仍需实际设备验收；不宣称离线 agent 工作或真机锁屏 push / idle-lock 已验收。
 
 ### 6. 独立 Web Push（需人工锁屏验收）
 
@@ -116,9 +132,25 @@ PWA 可在手机浏览器添加到主屏；Service Worker 范围应仅为 `/lite
 
 手机打开 `/lite/settings`，解锁 Homeling 后点“允许并订阅”；iPhone/iPad 需先添加到主屏并从主屏打开。浏览器权限拒绝、SW 尚未就绪、daemon 未配置和业务锁 423 都有明确提示。测试通知也是用户业务写，锁定时不能发送；后台既定通知只使用 daemon 的窄 `push.deliver` capability，不续用户租约。仅支持已验证的 Apple / FCM / Mozilla push service endpoints，任意 URL 不可作为发送目的地。
 
+通知先等待 debounce 窗口，快速自愈的阻塞不推；窗口内多个 persona 合并为一条，人数按 persona 去重而不是问题数。只有可观察的 resolved → pending 或完整身份替换才证明新请求代际；相同 pane、同内容审批若其间转换未被观察到，保守不推，可能漏通知，不宣称所有上游请求都能可靠识别。
+
 人工验收：锁屏后让 **daemon 注册的 persona 主 pane / 持久归属 task** 出现真实审批，正文须含具体操作；点击应进入正确 persona 主聊或 task；重复轮询、daemon 重启不重复同一 occurrence；明确解决后同内容新请求、新的 task occurrence / registry 主 pane replacement 可再通知。任务完成/失败只消费 #13 持久可信 Activity，unknown / 断连不猜结果。上游未提供可验证的同 pane 进程 incarnation：断连期间的同 pane 重启保持保守 unknown，不保证识别成新实例，不使用 session 名或 history UUID 猜测。
 
 发送前持久 claim 提供保守 at-most-once：claim 后崩溃/发送结果未知可能漏发，不是 exactly-once。`retract` 保证取消尚未派发的通知；resolve/replace 同次持久 commit 保存通知 tag 墓碑；`/lite/` 前台所有路由只读轮询墓碑并实际向 exact 同 origin `/lite/` SW 发送 `HOMELING_RETRACT`，按 tag 尝试本机关闭（离线/旧 worker 仅 best effort），不发送违反 `userVisibleOnly` 的静默撤回 push，不保证跨设备移除已显示通知。原 Collie 根 UI、SW、订阅、VAPID 与通知偏好完全不改。真机锁屏、点击、权限拒绝及新旧通知双通道仍为人工遗留。
+
+## 已接线的交互与边界
+
+- **Persona / 导航 / 定制**：只列 daemon registry 管理的伙伴，不收编旧 Collie space。可创建、打开主聊、改名与选择颜色/脸/宠物；删除保留关联 space/panes 为归档，不自动终止 agent。动效依赖可观察运行状态，支持减弱动效，断连/未知不伪装 thinking。
+- **对话 / 任务 / 审批**：显式发送，history 对账后确认送达；HTTP 成功不证明 agent 消费。任务使用既有 launcher allowlist，可看详情、工具 trace、只读终端镜像并发送后续指令。过期、归属不明或历史任务不能借详情入口执行当前 pane 控制；发送结果未知不自动重试。
+- **STT / 特殊键**：转写仅进入可编辑草稿，需显式发送。控制键仅提供实际协议支持的 Ctrl+C / Esc；Enter / Cmd 禁用。控制 accepted 不证明 TUI 已消费，预期 prompt 校验与上游派发也非原子操作。
+- **Triage / Activity**：首页按需处理的 registry persona 计数，同一伙伴多个请求只计一次； scoped 链接保留请求/任务身份，锁定期间暂停读取后需重新核对。Activity 持久记录可信事件与明确 launch 边界，不把临时快照拼成历史；缺失退出码、断连或不可证实的进程实例保持 unknown，历史任务提供只读降级。
+- **写锁**：空闲 15 分钟或会话绝对时长 8 小时后锁定；当前客户端使用服务端会话 admission，业务写携带从当前会话观察到的 epoch / generation 双头，缺失或旧代际拒绝写入，不能只凭新共享 cookie 恢复旧 tab 请求。读请求和后台通知不续用户租约，已运行 agent 不因锁定终止。锁定保留本地界面/草稿，但旧请求、录音或未知写结果不在解锁后自动重放。仅保护 Homeling daemon 写入口，不保护 Collie 根 API、同 origin XSS 或同 UID 进程，也不撤回已派发操作；手机后台/焦点恢复与真实 HTTPS 解锁仍须人工验收。
+
+## 语言设置
+
+在 `/lite/` 底部「设置 → 语言」选择 English / Deutsch / Español / 한국어 / 日本語 / 简体中文。界面即时更新；选择保存在本浏览器的 Homeling 偏好中，刷新后保留，**不需要环境变量或重启 daemon**。禁用浏览器存储时，本页仍可切换，但刷新后无法保留。语言设置仅影响产品界面；伙伴名、用户草稿、agent 回复/问题、终端输出不自动翻译。缺失翻译先回退英语；所有语言都缺失的 key 原样显示，便于发现遗漏。本票交付上述六种语言；不包含上游后来增加的 `zh-TW` 完整资源。
+
+已配置独立 push 且此浏览器已有登记订阅时，显式切换语言只同步该订阅的语言元数据：不申请通知权限、不重新订阅、不启用通知、不生成或重发旧通知。锁定或请求结果不明时，本地界面仍切换并保留选择，显示“通知语言未同步”；**解锁不自动重放，须点「同步通知语言」显式重试**。后续新通知的系统前缀按设备语言生成，原伙伴名/问题/任务摘要保持原文；已显示通知不因语言切换重写。
 
 ## Persona 记忆（#12）
 

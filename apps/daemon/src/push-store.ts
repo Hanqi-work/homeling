@@ -2,12 +2,14 @@ import { rename, writeFile, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { MutationAdmission } from './session-lock.ts';
+import { isLocale, type Locale } from '@homeling/contracts';
 import { ensurePushPrivateDirectory, readPushPrivateJson } from './push-private-files.ts';
 
 export interface StoredPushSubscription {
   readonly endpoint: string;
   readonly keys: { readonly p256dh: string; readonly auth: string };
   readonly owner: string;
+  readonly locale?: Locale;
 }
 export interface PendingPushOccurrence {
   readonly binding: string;
@@ -69,7 +71,8 @@ export class PushStore implements PushPersistence {
       const retractTags = state.retractTags ?? [];
       if (!Array.isArray(retractTags) || retractTags.some(tag => typeof tag !== 'string')) throw new Error('invalid push retract state');
       // Read-only compatibility for older v1 files; only a later admitted mutation persists the field.
-      this.current = { ...state, retractTags };
+      const subscriptions = state.subscriptions.map(({ locale, ...subscription }) => isLocale(locale) ? { ...subscription, locale } : subscription);
+      this.current = { ...state, subscriptions, retractTags };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       this.current = emptyPushState();

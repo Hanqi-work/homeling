@@ -68,18 +68,18 @@ describe("voice draft composer", () => {
     const getStream = f.dependencies.getStream;
     f.dependencies.getStream = async () => { throw new DOMException("denied", "NotAllowedError"); };
     const ui = await mount(f.dependencies);
-    await click("开始语音输入");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("麦克风权限被拒绝");
+    await click("Start voice input");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Microphone permission denied");
     expect(ui.sends).toEqual([]);
     f.dependencies.getStream = getStream;
-    await click("开始语音输入");
+    await click("Start voice input");
     await act(async () => root.render(null));
     expect(f.released()).toBe(1);
   });
 
   test("explicit sending during transcription cancels the old result instead of repopulating a draft", async () => {
     const f = media(); const ui = await mount(f.dependencies);
-    await click("开始语音输入"); await click("停止并转写");
+    await click("Start voice input"); await click("Stop and transcribe");
     await click("Send");
     expect(ui.sends).toEqual(["原草稿"]);
     expect(f.aborted()).toBe(true);
@@ -89,7 +89,7 @@ describe("voice draft composer", () => {
 
   test("recording enters an editable draft, and only explicit Send submits it", async () => {
     const f = media(); const ui = await mount(f.dependencies);
-    await click("开始语音输入"); await click("停止并转写");
+    await click("Start voice input"); await click("Stop and transcribe");
     expect(f.released()).toBe(1);
     await act(async () => f.finish("请继续"));
     expect(container.querySelector("textarea")!.value).toBe("原草稿\n请继续");
@@ -105,12 +105,12 @@ describe("voice draft composer", () => {
 
   test("late transcription cannot overwrite a newer draft or cross pane scope", async () => {
     const f = media(); const ui = await mount(f.dependencies);
-    await click("开始语音输入"); await click("停止并转写");
+    await click("Start voice input"); await click("Stop and transcribe");
     await ui.edit("新草稿");
     expect(f.aborted()).toBe(true);
     await act(async () => f.finish("旧语音"));
     expect(container.querySelector("textarea")!.value).toBe("新草稿");
-    await click("开始语音输入"); await click("停止并转写");
+    await click("Start voice input"); await click("Stop and transcribe");
     await ui.switchPane();
     expect(f.aborted()).toBe(true);
     await act(async () => f.finish("错误 pane 的语音"));

@@ -79,7 +79,7 @@ describe("persona memory editor public UI and fetch seam", () => {
     await mount(f.fetcher);
     await edit("facts", "Keep this draft");
     await submit("facts");
-    expect(container.textContent).toContain("保存结果未知");
+    expect(container.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
     expect(saveDisabled()).toBe(true);
     expect(textarea("facts").value).toBe("Keep this draft");
   });
@@ -88,8 +88,8 @@ describe("persona memory editor public UI and fetch seam", () => {
     await mount(f.fetcher);
     await edit("facts", "不重放此草稿");
     await submit("facts");
-    expect(container.textContent).toContain("保存结果未知");
-    expect(container.textContent).not.toContain("保存被拒绝");
+    expect(container.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
+    expect(container.textContent).not.toContain("save rejected");
     expect(saveDisabled()).toBe(true);
     await submit("facts");
     expect(f.calls).toHaveLength(2);
@@ -106,7 +106,7 @@ describe("persona memory editor public UI and fetch seam", () => {
     await submit("facts");
     await act(async () => root.render(<PersonaMemoryEditor personaId="persona" fetcher={replacement.fetcher} />));
     expect(saveDisabled()).toBe(true);
-    expect(container.textContent).toContain("保存结果未知");
+    expect(container.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
     expect(textarea("facts").value).toBe("保留草稿");
     expect(replacement.calls).toHaveLength(0);
     await reload();
@@ -118,7 +118,7 @@ describe("persona memory editor public UI and fetch seam", () => {
     const f = fake(response({}, 500), response());
     await mount(f.fetcher);
     expect(saveDisabled()).toBe(true);
-    expect(container.textContent).toContain("加载失败");
+    expect(container.textContent).toContain("Loading failed");
     await submit("facts");
     expect(f.calls).toHaveLength(1);
     await reload();
@@ -159,7 +159,7 @@ describe("persona memory editor public UI and fetch seam", () => {
       expect(textarea("facts").value).toBe("新 persona 的记忆");
       await act(async () => { finish(response()); });
       expect(textarea("facts").value).toBe("新 persona 的记忆");
-      expect(container.querySelector('[role="status"]')?.textContent).not.toContain("已保存");
+      expect(container.querySelector('[role="status"]')?.textContent).not.toContain("Saved");
     });
   }
   test("saving one document refreshes clean documents without discarding another document's draft", async () => {
@@ -179,7 +179,7 @@ describe("persona memory editor public UI and fetch seam", () => {
     await mount(f.fetcher);
     await edit("facts", "保留我的草稿");
     await submit("facts");
-    expect(container.querySelector('[role="status"]')?.textContent).toContain("保存结果未知");
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
     expect(textarea("facts").value).toBe("保留我的草稿");
     expect(saveDisabled()).toBe(true);
   });
@@ -205,15 +205,15 @@ describe("persona memory editor public UI and fetch seam", () => {
       await mount(f.fetcher);
       await edit("facts", "结果不明的草稿");
       await submit("facts");
-      expect(container.textContent).toContain("保存结果未知");
-      expect(container.textContent).not.toContain("未保存");
+      expect(container.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
+      expect(container.textContent).not.toContain("Not saved");
       expect(textarea("facts").value).toBe("结果不明的草稿");
       await edit("preferences", "新的偏好草稿");
       await submit("preferences");
       expect(f.calls).toHaveLength(2);
       expect(saveDisabled("preferences")).toBe(true);
       await reload();
-      expect(container.textContent).toContain("保存结果未知");
+      expect(container.textContent).toMatch(/(?:Save result unknown|save result is unknown)/);
       expect(saveDisabled()).toBe(true);
       await submit("facts");
       expect(f.calls).toHaveLength(3);
@@ -230,8 +230,8 @@ describe("persona memory editor public UI and fetch seam", () => {
     await mount(f.fetcher);
     await edit("project", "锁定时的草稿");
     await submit("project");
-    expect(container.textContent).toContain("锁定");
-    expect(container.textContent).toContain("拒绝");
+    expect(container.textContent).toContain("locked");
+    expect(container.textContent).toContain("rejected");
     expect(textarea("project").value).toBe("锁定时的草稿");
     expect(saveDisabled("project")).toBe(true);
     await edit("facts", "另一个草稿");
@@ -249,8 +249,8 @@ describe("persona memory editor public UI and fetch seam", () => {
     await edit("facts", "我的草稿");
     await submit("facts");
     expect(textarea("facts").value).toBe("我的草稿");
-    expect(container.textContent).toContain("冲突");
-    expect(container.textContent).toContain("重新加载");
+    expect(container.textContent).toContain("conflict");
+    expect(container.textContent).toContain("Reload");
     expect(saveDisabled()).toBe(true);
     await edit("facts", "保留的草稿");
     await submit("facts");
@@ -270,8 +270,8 @@ describe("persona memory editor public UI and fetch seam", () => {
     expect(container.querySelectorAll("textarea")).toHaveLength(3);
     expect(textarea("facts").value).toBe("<script>alert('memory')</script>");
     expect(container.querySelector("script")).toBeNull();
-    expect(container.textContent).toContain("下次会话生效");
-    expect(container.textContent).toContain("不会热吸收");
+    expect(container.textContent).toContain("next session");
+    expect(container.textContent).toContain("does not absorb them live");
     expect(container.textContent).toContain("部分 agent 不支持记忆注入");
     for (const input of container.querySelectorAll("textarea")) {
       expect(container.querySelector(`label[for="${input.id}"]`)).not.toBeNull();
@@ -283,6 +283,6 @@ describe("persona memory editor public UI and fetch seam", () => {
     expect(new Headers(f.calls[1]!.init?.headers).get("Content-Type")).toBe("application/json");
     expect(JSON.parse(f.calls[1]!.init!.body as string)).toEqual({ kind: "preferences", content: "新的偏好", revision: "preferences-1" });
     expect(textarea("preferences").value).toBe("新的偏好");
-    expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain("已保存");
+    expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain("Saved");
   });
 });

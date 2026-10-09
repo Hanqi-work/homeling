@@ -5,13 +5,17 @@ import { AppRoot } from "./AppRoot.tsx";
 import { SessionAwareHomeTriage } from "./HomeTriage.tsx";
 import { PersonaMemoryEditor } from "./PersonaMemoryEditor.tsx";
 import { PersonaCustomize } from "./PersonaCustomize.tsx";
+import { LocaleProvider, useLocale } from "./locale.tsx";
 import { PushSettings } from "./PushSettings.tsx";
-import { PushRetractions } from './PushRetractions.tsx';
-import { LocaleProvider } from "./locale.tsx";
+import { PushRetractions } from "./PushRetractions.tsx";
 import { registerServiceWorker } from "./pwa/register-sw.ts";
 import "./index.css";
 
-const ActivityPanel = lazy(() => import("./ActivityPanel.tsx").then(module => ({ default: module.ActivityPanel })));
+const ActivityPanel = lazy(() => import("./ActivityPanel.tsx").then((module) => ({ default: module.ActivityPanel })));
+function ActivityLoading() {
+  const { t } = useLocale();
+  return <main className="p-6 text-sm text-neutral-400">{t("activity.loading")}</main>;
+}
 
 registerServiceWorker((handle) => {
   console.info("[homeling] new version available — call applyUpdate() to refresh");
@@ -28,7 +32,7 @@ createRoot(root).render(
           homeSummary: <SessionAwareHomeTriage />,
           memory: (personaId) => <PersonaMemoryEditor personaId={personaId} />,
           customize: (personaId) => <PersonaCustomize personaId={personaId} />,
-          activity: (personaId) => <Suspense fallback={<main className="p-6 text-sm text-neutral-400">Loading activity…</main>}><ActivityPanel personaId={personaId} /></Suspense>,
+          activity: (personaId) => <Suspense fallback={<ActivityLoading />}><ActivityPanel personaId={personaId} /></Suspense>,
           settings: <PushSettings />,
         }} />
       </BrowserRouter>
