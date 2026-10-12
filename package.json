@@ -1,0 +1,17 @@
+{
+  "name": "homeling",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "typecheck": "bun run --filter '*' typecheck",
+    "build": "bun run --filter @homeling/web build",
+    "dev:web": "bun run --filter @homeling/web dev",
+    "dev:daemon": "bun run --filter @homeling/daemon dev"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "happy-dom": "^20.14.5",
+    "typescript": "^5.9.3"
+  }
+}

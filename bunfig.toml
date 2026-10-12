@@ -1,0 +1,3 @@
+[install]
+# Workspaces live in apps/* and packages/* (see root package.json).
+exact = false
